@@ -31,6 +31,8 @@ android {
             jvmArgs '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED'
             jvmArgs '--add-opens', 'java.base/java.util=ALL-UNNAMED'
             jvmArgs '--add-opens', 'java.base/java.io=ALL-UNNAMED'
+            // JDK 21 下 Mockito 的 ByteBuddyAgent 需要允许自附加，否则单元测试初始化失败
+            jvmArgs '-Djdk.attach.allowAttachSelf=true'
         }
     }
 }

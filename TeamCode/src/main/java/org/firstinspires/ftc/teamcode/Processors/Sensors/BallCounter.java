@@ -11,9 +11,9 @@ import org.firstinspires.ftc.teamcode.Parameter.HypParams;
  *   <li>球道自动计数：每个“未遮挡 → 遮挡”的上升沿计 1 个球；</li>
  *   <li>容量判定：{@link #isFull()} 在计数达到 {@link #getCapacity()} 时为 true。</li>
  * </ol>
- * “满球停止吸球”由上层把 {@link #isFull()} 写入
- * {@code Sweeper.setIntakeLocked(boolean)}；“炮台发射完毕清空”与“操作手手动清空”
- * 都调用 {@link #reset()} / {@link #onShotComplete()}。这样本类不接触任何执行器，
+ * “满球停止吸球”由 {@code RobotPosition.isBallLaneFull()} 透传给 Sweeper；
+ * “炮台发射完毕清空”与“操作手手动清空”都调用
+ * {@link #reset()} / {@link #onShotComplete()}。这样本类不接触任何执行器，
  * 符合 FTC_Format.md 的分层要求。
  *
  * <p><b>两路 0/1 信号的区别（不要混淆）</b>：
@@ -43,9 +43,9 @@ import org.firstinspires.ftc.teamcode.Parameter.HypParams;
  *   while (opModeIsActive()) {
  *       boolean output = gamepad1.right_bumper;
  *       counter.update(output ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE);
- *       sweeper.setIntakeLocked(counter.isFull());
- *       if (gamepad1.yWasReleased()) counter.reset();                 // 手动清空
- *       if (turret.consumeShotComplete()) counter.onShotComplete();   // 发射完毕清空
+ *       // RobotPosition 内部持有并透传计数，Sweeper 自动读取 isBallLaneFull()
+ *       if (gamepad1.yWasReleased()) RobotPosition.getInstance().resetBallCount();
+ *       // 炮台发射完毕时 Turret 会调用 RobotPosition.resetBallCount()
  *       ...
  *   }
  * </pre>

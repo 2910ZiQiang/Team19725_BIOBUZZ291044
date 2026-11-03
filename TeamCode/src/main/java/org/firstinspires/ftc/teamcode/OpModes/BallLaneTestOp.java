@@ -42,7 +42,8 @@ import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
  *   1. 空球道，按 Y 清空 → Count 0；
  *   2. 逐个放入 1~4 个球，每个球只应 +1；第 4 个后 Full/Locked 变 true；
  *   3. 保持按住 LB，第 4 个球后吸球电机应停转（目标 0）；
- *   4. 按 B（或接入真实炮台后由 Turret.consumeShotComplete() 触发）→ Count 0；
+ *   4. 按 B（或接入真实炮台后由 Turret 自动调用
+ *      {@code RobotPosition.resetBallCount()} 触发）→ Count 0；
  *   5. 再按 LB，应能重新吸球。
  * </pre>
  */

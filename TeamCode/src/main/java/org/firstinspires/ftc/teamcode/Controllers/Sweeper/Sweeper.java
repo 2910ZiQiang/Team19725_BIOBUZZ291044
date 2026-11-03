@@ -54,7 +54,8 @@ public class Sweeper {
     /**
      * 球道已满时锁定吸球：{@link #setEat()} 被忽略，
      * {@link #setOutput()} / {@link #setGiveArtifact()} 不受影响。
-     * 由上层根据 BallCounter.isFull() 每帧写入。
+     * 正常比赛由 RobotPosition.isBallLaneFull() 自动判定；
+     * 此字段仅用于测试/特殊控制（BallLaneTestOp、SweeperTester）。
      */
     private boolean intakeLocked = false;
 

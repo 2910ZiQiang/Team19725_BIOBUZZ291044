@@ -131,6 +131,8 @@ public class TeleOpBlue extends LinearOpMode {
                     RobotPosition.getInstance().getBallCount(),
                     RobotPosition.getInstance().getBallCapacity());
             telemetry.addData("Ball Lane Full", RobotPosition.getInstance().isBallLaneFull());
+            telemetry.addData("Ball Counter",
+                    RobotPosition.getInstance().isBallCounterAvailable() ? "OK" : "MISSING (breakBeam)");
 
             // 位姿信息
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
