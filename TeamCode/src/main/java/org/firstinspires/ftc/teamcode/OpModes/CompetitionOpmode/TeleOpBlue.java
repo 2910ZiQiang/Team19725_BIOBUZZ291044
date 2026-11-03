@@ -62,6 +62,7 @@ public class TeleOpBlue extends LinearOpMode {
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
+        telemetry.addData("Y", "Clear Ball Count");
         telemetry.addData("--- P2 Controls ---", "");
         telemetry.update();
         telemetry.setMsTransmissionInterval(250);
@@ -99,6 +100,14 @@ public class TeleOpBlue extends LinearOpMode {
                 telemetry.addData("ResetPose", "Reset to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red"));
             }
 
+            // ======== 球道计数 / 容量保护 / 清空 ========
+            // 计数在 RobotPosition.update() 内完成（光电门 → BallCounter）；
+            // 满球时 Sweeper 自己会停止吸球，炮台发射完毕会自己清空计数。
+            // 操作手手动清空（Y）：只在本帧按下时清零一次。
+            if (gamepad1.yWasReleased()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
+
             if (gamepad1.left_bumper) {
                 sweeper.setEat();
             }
@@ -118,6 +127,10 @@ public class TeleOpBlue extends LinearOpMode {
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());
+            telemetry.addData("Ball Count", "%d / %d",
+                    RobotPosition.getInstance().getBallCount(),
+                    RobotPosition.getInstance().getBallCapacity());
+            telemetry.addData("Ball Lane Full", RobotPosition.getInstance().isBallLaneFull());
 
             // 位姿信息
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
