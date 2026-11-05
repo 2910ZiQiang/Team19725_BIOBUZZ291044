@@ -1,5 +1,8 @@
 package org.firstinspires.ftc.teamcode.Processors.Sensors;
 
+import com.qualcomm.robotcore.hardware.AnalogInput;
+import com.qualcomm.robotcore.hardware.HardwareMap;
+
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 
 /**
@@ -92,6 +95,61 @@ public class BallCounter {
         this.capacity = capacity;
         this.lastBlocked = false;
         this.count = 0;
+    }
+
+    // ==================== 工厂方法：光电门由本类自己创建 ====================
+    //
+    // 分层约定（见算法架构图）：
+    //     RobotPosition  ->  BallCounter  ->  BreakBeamSensor  ->  AnalogInput
+    // 上层（RobotPosition）只允许调用 BallCounter，不得跨级接触 BreakBeamSensor，
+    // 也不得自己读 AnalogInput。因此“根据 HardwareMap 找到光电门并构造传感器”
+    // 这件事放在本类内部完成。
+
+    /** 光电门在 Robot Configuration 中的默认模拟口设备名 */
+    public static final String DEFAULT_BREAK_BEAM_DEVICE = "breakBeam";
+
+    /** 按默认设备名与默认容量创建；光电门未配置时返回 null */
+    public static BallCounter createIfPresent(HardwareMap hardwareMap) {
+        return createIfPresent(hardwareMap, DEFAULT_BREAK_BEAM_DEVICE, HypParams.BALL_CAPACITY);
+    }
+
+    /** 按默认设备名创建指定容量；光电门未配置时返回 null */
+    public static BallCounter createIfPresent(HardwareMap hardwareMap, int capacity) {
+        return createIfPresent(hardwareMap, DEFAULT_BREAK_BEAM_DEVICE, capacity);
+    }
+
+    /**
+     * 从硬件表查找光电门并创建计数器。光电门是可选硬件，
+     * 未配置时返回 null 而不是抛异常（避免仅做定位/底盘调试的 OpMode 起不来）。
+     */
+    public static BallCounter createIfPresent(HardwareMap hardwareMap, String deviceName,
+                                              int capacity) {
+        if (hardwareMap == null) {
+            throw new IllegalArgumentException("hardwareMap must not be null");
+        }
+        if (deviceName == null || deviceName.isEmpty()) {
+            throw new IllegalArgumentException("deviceName must not be empty");
+        }
+        AnalogInput input = hardwareMap.tryGet(AnalogInput.class, deviceName);
+        return fromAnalogInput(input, capacity);
+    }
+
+    /**
+     * 由已获取的模拟输入创建计数器。这是本类唯一接触光电门硬件的入口，
+     * 公开出来是为了让单元测试可以传入假 AnalogInput，无需真机。
+     */
+    public static BallCounter fromAnalogInput(AnalogInput input, int capacity) {
+        if (input == null) {
+            return null;
+        }
+        double alpha = Math.max(0.01, Math.min(1.0, HypParams.breakBeamAlpha));
+        double threshold = Math.max(0.0, Math.min(1.0, HypParams.breakBeamThreshold));
+        return new BallCounter(new BreakBeamSensor(input, alpha, threshold), capacity);
+    }
+
+    /** @return 本类持有的光电门（仅供诊断/调参显示；上层正常逻辑不应跨级使用） */
+    public BreakBeamSensor getBreakBeam() {
+        return breakBeam;
     }
 
     /**

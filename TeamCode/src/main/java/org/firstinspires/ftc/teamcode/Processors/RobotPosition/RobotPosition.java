@@ -6,7 +6,6 @@ import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.acmerobotics.roadrunner.PoseVelocity2d;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
-import com.qualcomm.robotcore.hardware.AnalogInput;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.hardware.NormalizedColorSensor;
@@ -18,7 +17,6 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
 import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
-import org.firstinspires.ftc.teamcode.Processors.Sensors.BreakBeamSensor;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -32,9 +30,6 @@ public class RobotPosition {
 
     /** 融合定位器：Pinpoint 速度 + Limelight 视觉 + 自适应 EKF（权威位姿来源） */
     private AdaptiveEKFLocalizer fusionLocalizer;
-
-    /** 球道光电门在 Robot Configuration 中的模拟口设备名 */
-    private static final String BALL_BEAM_DEVICE = "breakBeam";
 
     /** 球道计数器：BreakBeam → BallCounter，本类持有并向 OpMode / Sweeper / Turret 透传 */
     private BallCounter ballCounter;
@@ -128,15 +123,7 @@ public class RobotPosition {
      * 计数接口返回 0/false，避免仅做定位/底盘调试的 OpMode 因缺少光电门而无法初始化。
      */
     private void initBallCounter(HardwareMap hardwareMap) {
-        AnalogInput input = hardwareMap.tryGet(AnalogInput.class, BALL_BEAM_DEVICE);
-        if (input == null) {
-            ballCounter = null;
-            return;
-        }
-        double alpha = Math.max(0.01, Math.min(1.0, HypParams.breakBeamAlpha));
-        double threshold = Math.max(0.0, Math.min(1.0, HypParams.breakBeamThreshold));
-        ballCounter = new BallCounter(new BreakBeamSensor(input, alpha, threshold),
-                HypParams.BALL_CAPACITY);
+        ballCounter = BallCounter.createIfPresent(hardwareMap, HypParams.BALL_CAPACITY);
     }
 
     // 每帧调用：推进融合定位器并返回当前位姿
