@@ -3,10 +3,7 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-
-import com.qualcomm.robotcore.hardware.AnalogInput;
 
 import org.junit.Test;
 
@@ -17,7 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * BallCounter 工厂方法与分层约束的单元测试。
+ * 球道计数分层约束的单元测试。
  *
  * <p>对应算法架构图的分层要求：
  * <pre>
@@ -26,167 +23,153 @@ import java.nio.file.Paths;
  * 上层不得跨级：RobotPosition 不允许 import / new BreakBeamSensor，
  * 也不允许读 AnalogInput；构造光电门的职责属于 {@link BallCounter}。
  *
- * <p>注意：FTC SDK 里 AnalogInput 是 <b>类</b>（不是接口），
- * 因此这里用继承 + 覆盖 getVoltage() 的方式做假设备，不接硬件。
+ * <p>本测试用 {@link FakeBeam} 注入假光电门（走 BallCounter 的
+ * {@code (BreakBeamSensor, int)} 构造器），不连接任何硬件。
  */
 public class BallCounterFactoryTest {
 
-    /** 未遮挡：接收端高电压 */
-    private static final double VOLTAGE_UNBLOCKED = 3.3;
-    /** 遮挡（球挡住光束）：接收端电压被拉低 */
-    private static final double VOLTAGE_BLOCKED = 0.0;
-
     private static final int CAPACITY = 4;
 
-    /** 假模拟输入：覆盖 getVoltage()，其余不实现。传 null controller 是安全的。 */
-    private static class FakeAnalogInput extends AnalogInput {
-        double voltage;
+    /**
+     * 假光电门：不接 AnalogInput，只暴露一个可写的遮挡状态。
+     * 继承 BreakBeamSensor 是为了复用 BallCounter 的构造签名。
+     */
+    private static class FakeBeam extends BreakBeamSensor {
+        boolean blocked;
 
-        FakeAnalogInput(double voltage) {
-            super(null, 0);
-            this.voltage = voltage;
+        FakeBeam() {
+            super(null, 0.8, 0.5);
         }
 
         @Override
-        public double getVoltage() {
-            return voltage;
+        public boolean update() {
+            return blocked;
         }
 
         @Override
-        public double getMaxVoltage() {
-            return BreakBeamSensor.VOLTAGE_REFERENCE;
+        public boolean isBlocked() {
+            return blocked;
         }
 
         @Override
-        public String getDeviceName() {
-            return "fakeBreakBeam";
+        public void reset() {
+            // 假光电门没有滤波状态
         }
     }
 
-    // ==================== 工厂方法 ====================
-
-    @Test
-    public void fromAnalogInputReturnsNullWhenSensorMissing() {
-        // 光电门是可选硬件：没有输入时应返回 null，交给上层按“无计数功能”处理
-        assertNull(BallCounter.fromAnalogInput(null, CAPACITY));
+    /** 模拟一帧：设定光电门本帧输出，再推进计数器 */
+    private static void frame(FakeBeam beam, BallCounter counter, boolean blocked, int mode) {
+        beam.blocked = blocked;
+        counter.update(mode);
     }
 
+    /** 一个完整小球：先离开光束，再挡光（产生一次上升沿） */
+    private static void ball(FakeBeam beam, BallCounter counter) {
+        frame(beam, counter, false, BallCounter.MODE_INTAKE);
+        frame(beam, counter, true, BallCounter.MODE_INTAKE);
+    }
+
+    // ==================== 构造器与容量 ====================
+
     @Test
-    public void fromAnalogInputBuildsCounterWhenSensorPresent() {
-        BallCounter counter = BallCounter.fromAnalogInput(
-                new FakeAnalogInput(VOLTAGE_UNBLOCKED), CAPACITY);
+    public void buildsCounterWithInjectedBeam() {
+        FakeBeam beam = new FakeBeam();
+        BallCounter counter = new BallCounter(beam, CAPACITY);
 
         assertNotNull(counter);
         assertEquals(CAPACITY, counter.getCapacity());
         assertEquals(0, counter.getCount());
         assertFalse(counter.isFull());
         assertEquals(CAPACITY, counter.getRemaining());
-        // 工厂内部必须自己创建光电门（证明 BreakBeamSensor 归 BallCounter 所有）
-        assertNotNull(counter.getBreakBeam());
     }
 
     @Test(expected = IllegalArgumentException.class)
-    public void fromAnalogInputRejectsNonPositiveCapacity() {
-        BallCounter.fromAnalogInput(new FakeAnalogInput(VOLTAGE_UNBLOCKED), 0);
+    public void rejectsNullBeam() {
+        new BallCounter(null, CAPACITY);
     }
 
     @Test(expected = IllegalArgumentException.class)
-    public void createIfPresentRejectsNullHardwareMap() {
-        BallCounter.createIfPresent(null, "breakBeam", CAPACITY);
+    public void rejectsNonPositiveCapacity() {
+        new BallCounter(new FakeBeam(), 0);
     }
 
-    @Test
-    public void defaultDeviceNameIsBreakBeam() {
-        assertEquals("breakBeam", BallCounter.DEFAULT_BREAK_BEAM_DEVICE);
-    }
-
-    // ==================== 端到端：硬件电压 -> 计数 ====================
+    // ==================== 计数行为 ====================
 
     @Test
-    public void countsFromRawAnalogVoltageWithoutTouchingBreakBeamDirectly() {
-        FakeAnalogInput input = new FakeAnalogInput(VOLTAGE_UNBLOCKED);
-        BallCounter counter = BallCounter.fromAnalogInput(input, CAPACITY);
-        assertNotNull(counter);
+    public void countsEachRisingEdgeOnce() {
+        FakeBeam beam = new FakeBeam();
+        BallCounter counter = new BallCounter(beam, CAPACITY);
 
-        // 未遮挡：高电压，不应计数
-        counter.update();
-        assertEquals(0, counter.getCount());
-
-        // 球进入：电压拉低 -> 上升沿 -> 计 1 个
-        input.voltage = VOLTAGE_BLOCKED;
-        counter.update();
-        counter.update();
-        assertEquals(1, counter.getCount());
-
-        // 球停在门口不动：不重复计数
-        counter.update();
-        counter.update();
-        assertEquals(1, counter.getCount());
-
-        // 球离开 -> 再来一个
-        input.voltage = VOLTAGE_UNBLOCKED;
-        counter.update();
-        input.voltage = VOLTAGE_BLOCKED;
-        counter.update();
-        counter.update();
+        ball(beam, counter);
+        ball(beam, counter);
         assertEquals(2, counter.getCount());
+        assertFalse(counter.isFull());
+        assertEquals(2, counter.getRemaining());
     }
 
     @Test
-    public void saturatesAtCapacityFromRealVoltagePath() {
-        FakeAnalogInput input = new FakeAnalogInput(VOLTAGE_UNBLOCKED);
-        BallCounter counter = BallCounter.fromAnalogInput(input, 2);
-        assertNotNull(counter);
+    public void heldBeamDoesNotCountRepeatedly() {
+        FakeBeam beam = new FakeBeam();
+        BallCounter counter = new BallCounter(beam, CAPACITY);
 
-        for (int i = 0; i < 5; i++) {
-            input.voltage = VOLTAGE_UNBLOCKED;
-            counter.update();
-            input.voltage = VOLTAGE_BLOCKED;
-            counter.update();
-            counter.update();
+        frame(beam, counter, false, BallCounter.MODE_INTAKE);
+        frame(beam, counter, true, BallCounter.MODE_INTAKE);
+        frame(beam, counter, true, BallCounter.MODE_INTAKE);
+        frame(beam, counter, true, BallCounter.MODE_INTAKE);
+        assertEquals(1, counter.getCount());
+    }
+
+    @Test
+    public void saturatesAtCapacity() {
+        FakeBeam beam = new FakeBeam();
+        BallCounter counter = new BallCounter(beam, CAPACITY);
+
+        for (int i = 0; i < 7; i++) {
+            ball(beam, counter);
         }
-        assertEquals(2, counter.getCount());
+        assertEquals(CAPACITY, counter.getCount());
         assertTrue(counter.isFull());
         assertEquals(0, counter.getRemaining());
     }
 
     @Test
-    public void invalidVoltageDoesNotCreateFalseEdge() {
-        FakeAnalogInput input = new FakeAnalogInput(VOLTAGE_UNBLOCKED);
-        BallCounter counter = BallCounter.fromAnalogInput(input, CAPACITY);
-        assertNotNull(counter);
+    public void outputModeCountsDownAndClampsAtZero() {
+        FakeBeam beam = new FakeBeam();
+        BallCounter counter = new BallCounter(beam, CAPACITY);
 
-        counter.update();
-        // 断线读数 NaN：不应被当作“遮挡”而误计数
-        input.voltage = Double.NaN;
-        counter.update();
-        counter.update();
+        ball(beam, counter);
+        ball(beam, counter);
+        ball(beam, counter);
+        assertEquals(3, counter.getCount());
+
+        for (int i = 0; i < 5; i++) {
+            frame(beam, counter, false, BallCounter.MODE_OUTPUT);
+            frame(beam, counter, true, BallCounter.MODE_OUTPUT);
+        }
         assertEquals(0, counter.getCount());
+        assertFalse(counter.isFull());
     }
 
     @Test
-    public void outputModeCountsDownFromRealVoltagePath() {
-        FakeAnalogInput input = new FakeAnalogInput(VOLTAGE_UNBLOCKED);
-        BallCounter counter = BallCounter.fromAnalogInput(input, CAPACITY);
-        assertNotNull(counter);
+    public void resetClearsCountAndRearmsEdgeDetection() {
+        FakeBeam beam = new FakeBeam();
+        BallCounter counter = new BallCounter(beam, CAPACITY);
 
-        for (int i = 0; i < 2; i++) {
-            input.voltage = VOLTAGE_UNBLOCKED;
-            counter.update();
-            input.voltage = VOLTAGE_BLOCKED;
-            counter.update();
-            counter.update();
-        }
+        ball(beam, counter);
+        ball(beam, counter);
         assertEquals(2, counter.getCount());
 
-        for (int i = 0; i < 2; i++) {
-            input.voltage = VOLTAGE_UNBLOCKED;
-            counter.update(BallCounter.MODE_OUTPUT);
-            input.voltage = VOLTAGE_BLOCKED;
-            counter.update(BallCounter.MODE_OUTPUT);
-            counter.update(BallCounter.MODE_OUTPUT);
-        }
+        // 清空时光电门仍被挡住：不能把停在门口的同一个球再计一次
+        beam.blocked = true;
+        counter.reset();
         assertEquals(0, counter.getCount());
+
+        frame(beam, counter, true, BallCounter.MODE_INTAKE);
+        assertEquals(0, counter.getCount());
+
+        // 球离开后再来一个，才应重新计数
+        ball(beam, counter);
+        assertEquals(1, counter.getCount());
     }
 
     // ==================== 分层约束（静态检查） ====================
@@ -211,11 +194,10 @@ public class BallCounterFactoryTest {
                 code.contains("import com.qualcomm.robotcore.hardware.AnalogInput"));
         assertFalse("RobotPosition 不得 new BreakBeamSensor(...)",
                 code.contains("new BreakBeamSensor"));
-        assertFalse("RobotPosition 不得引用 AnalogInput.class",
-                code.contains("AnalogInput.class"));
 
-        assertTrue("RobotPosition 应通过 BallCounter.createIfPresent 获得计数器",
-                code.contains("BallCounter.createIfPresent"));
+        // 必须通过 BallCounter 的构造器创建（光电门生命周期归 BallCounter）
+        assertTrue("RobotPosition 应通过 new BallCounter(hardwareMap, ...) 创建计数器",
+                code.contains("new BallCounter(hardwareMap"));
     }
 
     private static Path locateRobotPositionSource() {

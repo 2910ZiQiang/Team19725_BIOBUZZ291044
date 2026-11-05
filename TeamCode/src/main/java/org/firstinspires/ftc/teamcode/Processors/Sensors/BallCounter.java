@@ -97,59 +97,47 @@ public class BallCounter {
         this.count = 0;
     }
 
-    // ==================== 工厂方法：光电门由本类自己创建 ====================
+    // ==================== 构造器：光电门由本类自己创建 ====================
     //
     // 分层约定（见算法架构图）：
     //     RobotPosition  ->  BallCounter  ->  BreakBeamSensor  ->  AnalogInput
-    // 上层（RobotPosition）只允许调用 BallCounter，不得跨级接触 BreakBeamSensor，
-    // 也不得自己读 AnalogInput。因此“根据 HardwareMap 找到光电门并构造传感器”
-    // 这件事放在本类内部完成。
+    // 上层只传 HardwareMap + 设备名，BreakBeamSensor 的生命周期完全由本类管理。
+    // 直接用 BreakBeamSensor 已有的构造器，不重复实现设备查找与阈值校验。
 
-    /** 光电门在 Robot Configuration 中的默认模拟口设备名 */
-    public static final String DEFAULT_BREAK_BEAM_DEVICE = "breakBeam";
-
-    /** 按默认设备名与默认容量创建；光电门未配置时返回 null */
-    public static BallCounter createIfPresent(HardwareMap hardwareMap) {
-        return createIfPresent(hardwareMap, DEFAULT_BREAK_BEAM_DEVICE, HypParams.BALL_CAPACITY);
-    }
-
-    /** 按默认设备名创建指定容量；光电门未配置时返回 null */
-    public static BallCounter createIfPresent(HardwareMap hardwareMap, int capacity) {
-        return createIfPresent(hardwareMap, DEFAULT_BREAK_BEAM_DEVICE, capacity);
+    /**
+     * 用默认阈值与平滑系数创建球道计数器（内部创建 BreakBeamSensor）。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门（AnalogInput）在配置中的设备名
+     */
+    public BallCounter(HardwareMap hardwareMap, String deviceName) {
+        this(new BreakBeamSensor(hardwareMap, deviceName), HypParams.BALL_CAPACITY);
     }
 
     /**
-     * 从硬件表查找光电门并创建计数器。光电门是可选硬件，
-     * 未配置时返回 null 而不是抛异常（避免仅做定位/底盘调试的 OpMode 起不来）。
+     * 指定容量创建球道计数器（内部创建 BreakBeamSensor，阈值/平滑系数取默认）。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门在配置中的设备名
+     * @param capacity    球道容量（> 0）
      */
-    public static BallCounter createIfPresent(HardwareMap hardwareMap, String deviceName,
-                                              int capacity) {
-        if (hardwareMap == null) {
-            throw new IllegalArgumentException("hardwareMap must not be null");
-        }
-        if (deviceName == null || deviceName.isEmpty()) {
-            throw new IllegalArgumentException("deviceName must not be empty");
-        }
-        AnalogInput input = hardwareMap.tryGet(AnalogInput.class, deviceName);
-        return fromAnalogInput(input, capacity);
+    public BallCounter(HardwareMap hardwareMap, String deviceName, int capacity) {
+        this(new BreakBeamSensor(hardwareMap, deviceName), capacity);
     }
 
     /**
-     * 由已获取的模拟输入创建计数器。这是本类唯一接触光电门硬件的入口，
-     * 公开出来是为了让单元测试可以传入假 AnalogInput，无需真机。
+     * 指定阈值与平滑系数创建球道计数器（内部创建 BreakBeamSensor）。
+     * 阈值范围校验由 BreakBeamSensor 自己完成，本类不重复检查。
+     *
+     * @param hardwareMap 硬件映射表
+     * @param deviceName  对射光电门在配置中的设备名
+     * @param alpha       EMA 平滑系数，范围 (0, 1]
+     * @param threshold   归一化遮挡阈值，范围 [0, 1]
+     * @param capacity    球道容量（> 0）
      */
-    public static BallCounter fromAnalogInput(AnalogInput input, int capacity) {
-        if (input == null) {
-            return null;
-        }
-        double alpha = Math.max(0.01, Math.min(1.0, HypParams.breakBeamAlpha));
-        double threshold = Math.max(0.0, Math.min(1.0, HypParams.breakBeamThreshold));
-        return new BallCounter(new BreakBeamSensor(input, alpha, threshold), capacity);
-    }
-
-    /** @return 本类持有的光电门（仅供诊断/调参显示；上层正常逻辑不应跨级使用） */
-    public BreakBeamSensor getBreakBeam() {
-        return breakBeam;
+    public BallCounter(HardwareMap hardwareMap, String deviceName,
+                       double alpha, double threshold, int capacity) {
+        this(new BreakBeamSensor(hardwareMap, deviceName, alpha, threshold), capacity);
     }
 
     /**
