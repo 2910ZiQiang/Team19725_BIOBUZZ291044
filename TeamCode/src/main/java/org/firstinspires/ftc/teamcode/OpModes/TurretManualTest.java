@@ -33,11 +33,6 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.YawController;
  *
  * <p>遥测中的 {@code Fire ready big/small} 为 {@link Turret#update} 的返回值，
  * 即对应发射器当前是否具备发射条件（飞轮转速 + 俯仰 + 平转均到位）。
- *
- * <p><b>球道计数联动</b>：{@link Turret} 在一次有效发射周期结束时调用
- * {@code RobotPosition.resetBallCount()}。本测试不初始化 RobotPosition，
- * 因此这里只验证扳机与发射周期；完整的“发射完毕清空计数”用
- * {@code BallLaneTestOp}（B 键模拟）或接入炮台的主程序验证。
  */
 @Config
 @TeleOp(name = "TurretManualTest", group = "Tests")
@@ -102,7 +97,6 @@ public class TurretManualTest extends LinearOpMode {
             telemetry.addData("Target speed small (tick/s)", targetSpeedSmall);
             telemetry.addData("Fire ready big", ready.big);
             telemetry.addData("Fire ready small", ready.small);
-            telemetry.addData("turret firing", turret.isFiring());
             telemetry.addData("speedStep", speedStep);
             telemetry.update();
         }

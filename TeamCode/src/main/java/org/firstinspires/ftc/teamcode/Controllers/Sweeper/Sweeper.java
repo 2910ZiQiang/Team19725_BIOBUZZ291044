@@ -8,7 +8,6 @@ import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
-import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 
 @Config
 /**
@@ -50,13 +49,6 @@ public class Sweeper {
 
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
-
-    /**
-     * 球道已满时锁定吸球：{@link #setEat()} 被忽略，
-     * {@link #setOutput()} / {@link #setGiveArtifact()} 不受影响。
-     * 由上层根据 BallCounter.isFull() 每帧写入。
-     */
-    private boolean intakeLocked = false;
 
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
@@ -101,8 +93,7 @@ public class Sweeper {
     }
 
     public void setEat() {
-        // 球道已满时忽略吸球请求，防止第 5 个球被卷入造成堵球
-        targetVelocity = (intakeLocked || isBallLaneFull()) ? 0 : EatVel;
+        targetVelocity = EatVel;
     }
 
     public void setGiveArtifact() {
@@ -121,33 +112,6 @@ public class Sweeper {
         targetVelocity = velocity;
     }
 
-    /**
-     * 设置吸球锁定。true 时 {@link #setEat()} 不会启动吸球；
-     * 出球 / 送球 / 铲子控制不受影响。上层应每帧写入
-     * {@code ballCounter.isFull()}，计数降到容量以下后自动解锁。
-     *
-     * @param locked true = 禁止吸球
-     */
-    public void setIntakeLocked(boolean locked) {
-        this.intakeLocked = locked;
-    }
-
-    /** @return 当前是否被显式锁定吸球（测试/特殊控制用；比赛主程序通常不再调用） */
-    public boolean isIntakeLocked() {
-        return intakeLocked;
-    }
-
-    /** @return 球道是否已满（从 RobotPosition 透传；未初始化时为 false） */
-    public boolean isBallLaneFull() {
-        RobotPosition rp = RobotPosition.getInstanceOrNull();
-        return rp != null && rp.isBallLaneFull();
-    }
-
-    /** @return 当前是否禁止吸球（显式锁定或球道已满） */
-    public boolean isIntakeBlocked() {
-        return intakeLocked || isBallLaneFull();
-    }
-
     /** 铲子抬起（切换到抬起角度） */
     public void setShovelUp() {
         targetShovelPos = ShovelUpPos;
@@ -159,11 +123,6 @@ public class Sweeper {
     }
 
     public void update() {
-        // 锁定可能在 setEat() 之后才写入（同一帧），这里再做一次兜底，
-        // 保证“第 4 个球计数完成的那一帧”吸球电机立刻收到 0 目标。
-        if ((intakeLocked || isBallLaneFull()) && targetVelocity == EatVel) {
-            targetVelocity = 0;
-        }
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;
@@ -202,10 +161,11 @@ public class Sweeper {
     }
 
     public void setTelemetry() {
-        telemetry.addData("Sweeper velocity (tick/s)", "%.0f", getVel());
-        telemetry.addData("Sweeper target (tick/s)", lastTargetVelocity);
-        telemetry.addData("Sweeper current (A)", "%.2f", getCurrent());
-        telemetry.addData("Sweeper ball lane full", isBallLaneFull());
-        telemetry.addData("Sweeper intake blocked", isIntakeBlocked());
+        /*
+        telemetry.addData("Sweeper Velocity", getVel());
+        telemetry.addData("Sweeper Power*1000", getPower()*1000);
+        telemetry.addData("Sweeper Current", getCurrent());
+
+         */
     }
 }

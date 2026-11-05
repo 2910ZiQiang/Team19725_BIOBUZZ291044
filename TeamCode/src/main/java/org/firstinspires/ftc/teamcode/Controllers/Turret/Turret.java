@@ -4,8 +4,6 @@ import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
-import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-import org.firstinspires.ftc.teamcode.utility.ShotCycle;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -65,15 +63,6 @@ public class Turret {
 
     private final Telemetry telemetry;
 
-    /**
-     * 一个发射周期的最短持续时间（秒）。短于该值的扳机脉冲视为抖动，
-     * 不产生“发射完毕”事件。可在 FTC Dashboard 的 Turret 配置中调整。
-     */
-    public static double ShotMinDurationSec = ShotCycle.DEFAULT_MIN_DURATION_SEC;
-
-    /** 发射周期状态机：把扳机命令转换为单帧的“发射完毕”事件 */
-    private final ShotCycle shotCycle = new ShotCycle();
-
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
         this.yawController = new YawController(hardwareMap, telemetry);
@@ -81,7 +70,6 @@ public class Turret {
                 BIG_MOTOR, BIG_PITCH_SERVO, BIG_TRIGGER_SERVO, Shooter.BIG_PARAMS);
         this.shooterSmall = new Shooter(hardwareMap, telemetry,
                 SMALL_MOTOR, SMALL_PITCH_SERVO, SMALL_TRIGGER_SERVO, Shooter.SMALL_PARAMS);
-        shotCycle.setMinDurationSec(ShotMinDurationSec);
         stop();
     }
 
@@ -122,17 +110,6 @@ public class Turret {
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
 
-        // 发射周期：任一扳机释放即视为“正在发射”，两个扳机都关闭才算本轮结束
-        shotCycle.setMinDurationSec(ShotMinDurationSec);
-        shotCycle.update(triggerBig || triggerSmall);
-        if (shotCycle.consumeCompleted()) {
-            // PPT 架构：Turret 发射完毕后直接清空球道计数
-            RobotPosition rp = RobotPosition.getInstanceOrNull();
-            if (rp != null) {
-                rp.resetBallCount();
-            }
-        }
-
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
     }
 
@@ -141,12 +118,6 @@ public class Turret {
         yawController.stop();
         shooterBig.stop();
         shooterSmall.stop();
-        shotCycle.reset();
-    }
-
-    /** @return 当前是否处于发射（扳机释放）状态 */
-    public boolean isFiring() {
-        return shotCycle.isFiring();
     }
 
     /** 输出遥测（调用方需自行 telemetry.update()） */
@@ -154,6 +125,5 @@ public class Turret {
         yawController.setTelemetry();
         shooterBig.setTelemetry();
         shooterSmall.setTelemetry();
-        telemetry.addData("turret firing", isFiring());
     }
 }

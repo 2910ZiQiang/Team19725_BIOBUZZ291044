@@ -24,23 +24,6 @@ public class HypParams {
     public static double maxOmega = Math.PI;
 
     /**
-     * 球道容量：球道内最多可同时容纳的球数（由比赛规则与战术决定，不是标定量）。
-     * {@code BallCounter} 用它判定 {@code isFull()}；达到后主程序锁定 {@code Sweeper} 的吸球。
-     */
-    public static int BALL_CAPACITY = 4;
-
-    /**
-     * 对射光电门（球道计数）归一化遮挡阈值 [0,1]：滤波电压低于该值判定为遮挡。
-     * 先由 FTC Dashboard 的 BallLaneTestOp 标定，再把稳定值写到这里。
-     */
-    public static double breakBeamThreshold = 0.5;
-
-    /**
-     * 对射光电门 EMA 平滑系数 (0,1]：越接近 1 响应越快、抗噪越差。
-     */
-    public static double breakBeamAlpha = 0.8;
-
-    /**
      * todo:红队初始姿态（单位：英寸，弧度）
      * 包含初始位置(x, y)和初始朝向(theta)
      */

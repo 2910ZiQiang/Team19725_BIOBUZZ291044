@@ -16,20 +16,11 @@ public class SweeperTester extends LinearOpMode {
         sweeper = new Sweeper(hardwareMap, telemetry);
         sweeper.setStop();
         telemetry.addLine("A: Eat | B: GiveArtifact | Y: Output | X: Stop");
-        telemetry.addLine("LB: Lock intake (simulate full) | RB: Unlock intake");
         telemetry.addLine("Dpad Up: Shovel Up | Dpad Down: Shovel Down");
         telemetry.update();
         waitForStart();
         
         while (opModeIsActive()) {
-            // 球道满球锁定联调：没有初始化 RobotPosition 时，用显式锁定模拟 isFull()
-            if (gamepad1.leftBumperWasPressed()) {
-                sweeper.setIntakeLocked(true);
-            }
-            if (gamepad1.rightBumperWasPressed()) {
-                sweeper.setIntakeLocked(false);
-            }
-
             if (gamepad1.aWasPressed()) {
                 sweeper.setEat();
             } else if (gamepad1.bWasPressed()) {
@@ -49,9 +40,6 @@ public class SweeperTester extends LinearOpMode {
             
             sweeper.update();
             sweeper.setTelemetry();
-            telemetry.addData("Intake Lock (override)", sweeper.isIntakeLocked());
-            telemetry.addData("Ball Lane Full (RP)", sweeper.isBallLaneFull());
-            telemetry.addData("Intake Blocked", sweeper.isIntakeBlocked());
             telemetry.addData("Shovel Pos", "%.3f", sweeper.getShovelPosition());
             telemetry.update();
         }
