@@ -86,6 +86,11 @@ public class YawController {
     /** 最近一次计算的到位标志 */
     private boolean onTarget = false;
 
+    /** 最近一次 update() 采到的编码器读数 (tick)，供读取与遥测复用 */
+    private double cachedTicks = 0;
+    /** 最近一次 update() 采到的目标编码器读数 (tick)，供遥测复用 */
+    private double cachedTargetTicks = 0;
+
     public YawController(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
         this.motor = hardwareMap.get(DcMotorEx.class, MOTOR_NAME);
@@ -127,7 +132,10 @@ public class YawController {
         targetYaw = Math.max(-yawRange, Math.min(yawRange, yaw));
 
         double targetTicks = yawZeroTicks + targetYaw * tickPerRad;
+        // 本帧唯一的硬件采样点：编码器只读一次，getter 与遥测复用缓存
         double currentTicks = motor.getCurrentPosition();
+        cachedTicks = currentTicks;
+        cachedTargetTicks = targetTicks;
 
         // 每帧刷新参数，使 Dashboard 上的改动即时生效
         slot.withKP(kP).withKI(kI).withKD(kD)
@@ -154,9 +162,9 @@ public class YawController {
 
     // ==================== 读取 ====================
 
-    /** @return 当前平转角（弧度，已扣除零位） */
+    /** @return 最近一次 update() 采到的平转角（弧度，已扣除零位） */
     public double getCurrentYaw() {
-        return (motor.getCurrentPosition() - yawZeroTicks) / tickPerRad;
+        return (cachedTicks - yawZeroTicks) / tickPerRad;
     }
 
     /** @return 最近一次下发的目标平转角（弧度，钳制后） */
@@ -174,14 +182,13 @@ public class YawController {
         return power;
     }
 
-    /** 输出遥测（调用方需自行 telemetry.update()） */
+    /** 输出遥测（只读 update() 缓存，调用方需自行 telemetry.update()） */
     public void setTelemetry() {
         telemetry.addData("Yaw target (deg)", "%.1f", Math.toDegrees(targetYaw));
         telemetry.addData("Yaw current (deg)", "%.1f", Math.toDegrees(getCurrentYaw()));
         telemetry.addData("Yaw error (deg)", "%.1f", Math.toDegrees(targetYaw - getCurrentYaw()));
         telemetry.addData("Yaw power", "%.3f", power);
         telemetry.addData("Yaw on target", onTarget);
-        telemetry.addData("Yaw ticks", "%d / %.0f",
-                motor.getCurrentPosition(), yawZeroTicks + targetYaw * tickPerRad);
+        telemetry.addData("Yaw ticks", "%.0f / %.0f", cachedTicks, cachedTargetTicks);
     }
 }

@@ -107,13 +107,13 @@ public class BallCounter {
     }
 
     /**
-     * 清零计数并复位边缘检测状态（不影响光电门的 threshold/alpha/极性配置）。
-     * 复位后立即采样一次同步物理状态：即使球仍挡在光电门中，
-     * 也不会因为状态被强设为"未遮挡"而在下一帧被误计一次。
+     * 清零计数并复位边缘检测状态（不影响光电门的 threshold/alpha 配置）。
+     * <b>不读取硬件</b>：以最近一帧 {@link BreakBeamSensor#isBlocked()} 的结果作为
+     * 边缘检测基准，下一帧 update() 若物理状态未变就不会产生虚假上升沿。
      */
     public void reset() {
         count = 0;
         breakBeam.reset();
-        lastBlocked = breakBeam.update();
+        lastBlocked = breakBeam.isBlocked();
     }
 }

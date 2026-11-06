@@ -43,6 +43,8 @@ public class BreakBeamSensor {
 
     /** 最近一次 update() 采到的归一化原始电压（未滤波） */
     private double rawVoltage;
+    /** 最近一次 update() 的归一化滤波电压（EMA 输出） */
+    private double filteredVoltage;
     /** 最近一次 update() 的遮挡判定结果 */
     private boolean blocked;
 
@@ -83,6 +85,7 @@ public class BreakBeamSensor {
         this.ema = new EMA(alpha);
         this.threshold = threshold;
         this.rawVoltage = 0.0;
+        this.filteredVoltage = 0.0;
         this.blocked = false;
     }
 
@@ -103,7 +106,8 @@ public class BreakBeamSensor {
             return blocked;
         }
         rawVoltage = normalize(voltage);
-        blocked = ema.update(rawVoltage) < threshold;
+        filteredVoltage = ema.update(rawVoltage);
+        blocked = filteredVoltage < threshold;
         return blocked;
     }
 
@@ -125,7 +129,7 @@ public class BreakBeamSensor {
      * 归一化滤波电压（EMA 输出），来自最近一次 update()，范围 [0,1]
      */
     public double getVoltage() {
-        return ema.getFilteredValue();
+        return filteredVoltage;
     }
 
     /**
@@ -164,12 +168,12 @@ public class BreakBeamSensor {
     }
 
     /**
-     * 重置滤波器状态并立即重新采样一次，使 rawVoltage / getVoltage() / blocked
-     * 回落为与当前物理状态一致的快照（阈值/alpha 保持不变）。
+     * 重置滤波器状态（阈值 / alpha 与最近一次判定结果保持不变）。
+     * <b>不读取硬件</b>：下一帧 {@link #update()} 会用真实采样重新建立滤波状态，
+     * 因此调用方不会因重置而多一次硬件访问（见 FTC_Format.md §6）。
      */
     public void reset() {
         ema.reset();
-        update();
     }
 
     /**

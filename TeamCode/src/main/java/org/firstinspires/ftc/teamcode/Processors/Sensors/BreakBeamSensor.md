@@ -51,7 +51,7 @@
 | `getThreshold()` / `setThreshold(double)` | 归一化遮挡阈值 [0,1] |
 | `getAlpha()` / `setAlpha(double)` | EMA 平滑系数 (0,1] |
 | `isBlockedOnState()` / `setBlockedOnState(boolean)` | 遮挡对应的原始电平（极性） |
-| `reset()` | 重置滤波器状态与判定结果 |
+| `reset()` | 重置滤波器状态（不读硬件，判定结果保持到下一帧 `update()`） |
 
 ### 3.2 在 OpMode 中使用
 

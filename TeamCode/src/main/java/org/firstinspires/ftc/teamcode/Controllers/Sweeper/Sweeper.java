@@ -50,6 +50,13 @@ public class Sweeper {
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
 
+    /** 最近一次 update() 采到的功率，供读取与遥测复用 */
+    private double cachedPower = 0;
+    /** 最近一次 update() 采到的转速 (tick/s)，供读取与遥测复用 */
+    private double cachedVelocity = 0;
+    /** 最近一次 update() 采到的电流 (A)，供读取与遥测复用 */
+    private double cachedCurrent = 0;
+
     public static int ForR = 0;
 
     /** 铲子抬起时的舵机位置 [0,1]（todo: 实机标定） */
@@ -122,14 +129,18 @@ public class Sweeper {
         targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
         // 舵机保持位置：每帧刷新，保证 Dashboard 上改 ShovelUpPos/ShovelDownPos 后即时生效
         shovelServo.setPosition(targetShovelPos);
+        // 本帧唯一的硬件采样点：功率 / 转速 / 电流全部缓存，getter 与遥测只读缓存
+        cachedPower = motor.getPower();
+        cachedVelocity = motor.getVelocity();
+        cachedCurrent = motor.getCurrent(CurrentUnit.AMPS);
     }
 
     public double getPower() {
-        return motor.getPower();
+        return cachedPower;
     }
 
     public double getVel() {
-        return motor.getVelocity();
+        return cachedVelocity;
     }
 
     public int getTargetVelocity() {
@@ -146,7 +157,7 @@ public class Sweeper {
     }
 
     public double getCurrent() {
-        return motor.getCurrent(CurrentUnit.AMPS);
+        return cachedCurrent;
     }
 
     public void setTelemetry() {
