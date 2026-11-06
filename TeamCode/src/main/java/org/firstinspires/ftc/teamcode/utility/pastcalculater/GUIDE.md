@@ -48,7 +48,7 @@
 | 前馈 | `kS·sgn(ω*) + kV·ω* + kA·dω*/dt` | `kS·sgn(ω*) + kff·ω*` | `s·(kS·sgn + kff·ω*)`，`s=V_nom/V_busFilt` |
 | 反馈 | `kP·e + kI·∫e + kD·de/dt` | `kp·e + ki·∫e` | `kp·e_f + ki·∫e_f`（`e_f` 用**滤波后**转速） |
 | 积分门 | `|e| < iZone` 才积 | `|e| < iZone` 才积，掉速触发清零 | `|e| < eBand` 才积，冻结超 `iFreezeTimeoutSec` 强制清 |
-| 掉速处理 | 无 | `boost = clamp(kBoost·e, 0, boostMax)`，持续 `boostDurationSec` | 无（2026-11-06 删掉速状态机；此前是冻结积分 + 冻结电压 EMA） |
+| 掉速处理 | 无 | `boost = clamp(kBoost·e, 0, boostMax)`，持续 `boostDurationSec` | 无状态机；`|e| ≥ eBand` 时暂停吸收电压读数（2026-11-06 删掉速状态机，冻结窗口改为误差门表达） |
 | 速度滤波 | 无 | 无 | EMA，`τ` 在 `tauVMax~tauVMin` 按误差调度 |
 | 电压归一化 | 无 | 无 | 有（`useVoltageNorm` 开关，BIG/SMALL 均为 true） |
 | 稳态判据 | 本实验统一：`|e| ≤ max(settleFrac·|ω*|, 2·quantStep)` 连续 `settleFrames` 帧（三代同口径，否则图没法并排比） |

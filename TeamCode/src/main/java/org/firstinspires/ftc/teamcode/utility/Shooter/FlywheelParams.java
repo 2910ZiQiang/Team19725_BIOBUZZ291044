@@ -127,8 +127,10 @@ public class FlywheelParams {
      * 母线电压低通时间常数 (s)。必须远大于单发发射造成的电压跌落时长（≈0.4 s），
      * 否则会把「单发掉压」当成「电池没电」，在恢复期末把前馈放大到 &gt;1，人造一次饱和。
      *
-     * <p>原「掉速期间冻结 + 0.6 s hold-off + 2.0 s 冻结超时」三个参数已随状态机删除。
-     * 这一项现在是唯一的电压瞬态防护：0.4 s 跌落只走完 33%（12.40→12.00 V，s 变化 &lt;0.3%）。
+     * <p>原「掉速期间冻结 + 0.6 s hold-off + 2.0 s 冻结超时」三个参数已随状态机删除；
+     * 冻结窗口本身保留，但改成无状态的「{@code |e| ≥ eBand} 时不吸收读数」（见
+     * {@code FlywheelCalculator#updateBusVoltage}）。所以现在两级防护是：
+     * 这一项负责把 0.4 s 跌落压到 33%，误差门负责在大误差窗口内完全不吸收。
      * 不要调小，更不要退化成原始读数 {@code s=12/V_raw}（那会让 s 立刻跳 1.071）。
      */
     public double tauBus;
@@ -191,7 +193,8 @@ public class FlywheelParams {
         // ---- 母线电压归一化（Tune6.7 BusVoltageFilter 定 tauBus）----
         // 2026-10-27 起默认开启：09-02 两份实测（大轮 20:12 vscale≡1、小轮 20:16 vscale≈0.96）
         // 对比显示开启后前馈随母线跌落自动补偿，判据⑥待 VoltageSweep 收尾。
-        // 掉速期间冻结已随状态机删除，现在靠 tauBus=1.0 s 低通吸收单发跌压（见字段注释）。
+        // 掉速状态机已删，冻结窗口改由「|e| ≥ eBand 时不吸收读数」承担；这里靠
+        // tauBus=1.0 s 低通吸收单发跌压（见字段注释）。
         BIG.useVoltageNorm = true;
         BIG.vBusNominal = 12.0;
         BIG.vScaleMin = 0.85;
