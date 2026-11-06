@@ -6,7 +6,9 @@
 
 - 构造时通过 `RobotPosition.getInstance().getPose2d()` 取起点位姿（轨迹在构造时刻固化）；
 - 执行时轨迹跟随内部持续调用融合定位器推进；
-- `AutoAimAction` 每帧直接读 `AdaptiveEKFLocalizer.getPose()`。
+- `AutoAimAction` 每帧直接读 `AdaptiveEKFLocalizer.getPose()`；
+- 组合类 Action（`AutoCycleAction` / `ContinuousRouteAction`）把移动段交给
+  `utility/DeferredAction` 延迟构造，保证仍以**执行时的真实位姿**规划。
 
 ## 通用约定
 
@@ -25,6 +27,12 @@
    （段间速度连续、不中途停车）；约束来源为 `MecanumDrive.Params` 五参数。
    原理、标定与验证方法见
    [`RoadRunner/时间最优运动.md`](../../RoadRunner/时间最优运动.md)。
+7. **多段组合**（`SequentialAction` / `ParallelAction`）：可把一个完整周期合成单个 Action 入队，
+   并用 `utility/DeferredAction` 包装移动段，使其仍在**执行时**才构造（避免用旧位姿规划）。
+   但需注意：`MecanumDrive.actionBuilder` 的 `beginEndVel = 0`，Road Runner 的 `profile()`
+   用同一个值同时作为**起点与终点速度**，因此**每一份 `build()` 出来的轨迹必然以 v=0 结束**——
+   任何 Action 组合器都无法消除两条独立轨迹之间的物理停车。
+   「周期组合」见第 13 节，「单条轨迹不停车」见第 14 节。
 
 ## Action 一览
 
@@ -42,6 +50,8 @@
 | `AutoAimAction` | 原地 PD 转向，自动锁定当前 HIVE 侧球门 | `(TeamColor)` |
 | `EatAction` | 集球器以吃球速度运转指定时长后停转 | `(Sweeper)` 或 `(Sweeper, long durationMs)` |
 | `AdaptiveParkAction` | T-3s 检测整机是否接触场地边框，接触则开到安全位置停靠，否则原地停止 | `(MecanumDrive, ElapsedTime matchTime, long durationMs, long leadTimeMs)` |
+| `AutoCycleAction` | **保守版**：把「去取球点 → 吃球 → 去另一发射区 →（可选）瞄准」合成一个 Action（取球点仍停车） | `(TeamColor, Sweeper, Pose2d goal)` |
+| `ContinuousRouteAction` | **激进版**：去取球点 + 路过式吃球 + 去另一发射区，全程**单条轨迹不停车** | `(TeamColor, Sweeper, Pose2d goal)` |
 
 ---
 
@@ -279,6 +289,114 @@ actionRunner.add(new AdaptiveParkAction(
 - 判据依赖定位精度；若实车贴边仍有压线风险，调大 `parkBorderMarginIn`（如 4~5 in）。
 - 极端情况下（外接盒大于安全区）退回场地中心 `(0,0)`，航向不变。
 
+## 13. AutoCycleAction（保守版：周期组合）
+
+**作用**：把自动阶段的一个完整周期合成为**一个** Action 入队：
+
+```
+GoToUnvisitedEatPointAvoidHiveAction → EatAction
+  → GoToOtherShootAreaViaHiveAction →（可选）AutoAimAction
+```
+
+取球点仍是终点，车会**停稳后**再吃球——与现主程序状态机语义一致，只是把「逐段投递」变成「一次投递」。
+
+**相对逐段入队的收益**：
+
+| 问题 | 逐段入队 | 组合后 |
+|------|----------|--------|
+| 段间空档 | `ActionRunner` **每帧最多启动一个 Action**，交接处有 1 帧（约 20 ms）空档，该帧没有任何代码给底盘下发电机指令 | `SequentialAction` 是 `tailrec`，上一子 Action 返回 false 的**同一帧**接下一段 |
+| 队列状态抖动 | `isBusy()` 在段间短暂为 false，`Chassis` 可能误判「队列空闲」而放行手柄或主动刹停 | 整个周期 `isBusy()` 恒为 true |
+| 旧位姿规划 | 每段在轮到自己时才 new，位姿正确 | 若把子 Action 提前 new，则会用**上一段开始前**的旧位姿规划；用 `DeferredAction` 保证仍是执行时构造 |
+
+**实现要点**：
+
+```java
+List<Action> steps = new ArrayList<>();
+steps.add(new DeferredAction(() -> new GoToUnvisitedEatPointAvoidHiveAction(teamColor)));
+steps.add(new EatAction(sweeper));
+steps.add(new DeferredAction(() -> new GoToOtherShootAreaViaHiveAction(teamColor, goal)));
+if (includeAim) steps.add(new AutoAimAction(teamColor));
+return new SequentialAction(steps);
+```
+
+**Dashboard 可调参数**：
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `includeAim` | `true` | 是否在周期末尾追加 `AutoAimAction` |
+
+**构造 / 接入**：
+
+```java
+actionRunner.add(new AutoCycleAction(teamColor, sweeper, HypParams.BlueAudienceUp));
+```
+
+**注意**：本 Action 只能消除调度空档，**不能**消除轨迹之间的减速到零（吃球段与移动段仍是独立轨迹）。
+需要全程不停车请用第 14 节。
+
+**状态**：尚未接入 `AutoRed` / `AutoBlue`，主程序仍按原状态机逐段投递。
+
+## 14. ContinuousRouteAction（激进版：单条轨迹不停车）
+
+**作用**：把「前往取球点 + 路过式吃球 + 前往另一发射区域」合成一个 Action，
+且整条路线**只有一份 `TrajectoryActionBuilder` 链**：途经点按速度/加速度约束通过，只在最末端停车。
+
+**为什么必须是一条 builder 链**：
+
+`MecanumDrive.actionBuilder` 传入 `beginEndVel = 0.0`，而 Road Runner 的 `profile()` 用同一个值
+同时作为**起点与终点速度**——因此每一份 `build()` 出来的轨迹必然以 `v = 0` 结束。
+`SequentialAction` / `ParallelAction` 都改变不了这一点；只有把全部途经点串进同一条链，
+才会共用一条时间最优 profile。
+
+**路线构成**：
+
+```
+start → leg1 途经点（绕开 Hive） → 触发点 → 取球点（作为途经点） → leg2 途经点（经 Hive 正下方） → 发射区
+```
+
+- 取球点作为**途经点**而非终点，因此经过时不停车；
+- leg1 / leg2 途经点分别由 `HiveRoutePlanner.waypoints(..., throughHive=false / true)` 生成，
+  几何约束同第 6~9 节；
+- 到达后自动 `EatPointTracker.markVisited(eatIndex)`。
+
+**吃球如何与移动并行**：
+
+在触发点（到达取球点前 `eatTriggerDistanceIn` 英寸）用 `builder.afterDisp(0.0, eatSeq)` 注册标记。
+Road Runner 构建时会把它包成：
+
+```
+ParallelAction(轨迹 Action, SequentialAction(SleepAction(触发时间), eatSeq))
+```
+
+即吃球与轨迹跟随**并行执行**，轨迹不等待吃球。`eatSeq` 直接复用 `EatAction`
+（每帧 `setEat()` + `update()`；因为 `Sweeper.update()` 每帧会把目标速度归零，
+一次性 `InstantAction` 无效）。
+
+**三个必须知道的代价**：
+
+| 现象 | 原因 | 规避 |
+|------|------|------|
+| 车已停在发射区，Action 仍未结束 | `ParallelAction` 需**两个子项都结束**；吃球时长 > 剩余轨迹时间 | `eatDurationMs` 设为约等于「触发点到路线结束」的行驶时间 |
+| 吃球可能提前/滞后 | `afterDisp` 实际是 `SleepAction(profile.inverse(disp))` 的**墙钟计时**，按**规划时间**触发而非实际位移；打滑、被顶、电压低时偏差明显 | 需精确时改为「每帧读实际位姿，距触发点 ≤ 容差才启动」的自定义 Action |
+| 行驶中吃球 | 前提是集球器能在行驶中把球吃进去 | 必须静止对准才能进球时，请用第 13 节保守版 |
+
+**Dashboard 可调参数**：
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `eatTriggerDistanceIn` | 12.0 | 到达取球点前多少英寸开始吃球（沿最后接近方向回退） |
+| `eatDurationMs` | 1200 | 吃球时长，应≈触发点到路线结束的行驶时间 |
+| `secondLegThroughHive` | `true` | 第二段是否经 Hive 正下方（`false` 为绕外侧） |
+| `includeAim` | `true` | 路线末尾是否追加 `AutoAimAction` |
+
+**构造 / 接入**：
+
+```java
+actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, HypParams.BlueAudienceUp));
+```
+
+**状态**：尚未接入 `AutoRed` / `AutoBlue`。
+
 ## 典型串联顺序
 
 ```
@@ -288,6 +406,15 @@ GoToOtherShootAreaViaHiveAction / GoToOtherShootAreaAvoidHiveAction → AutoAimA
 GoToUnvisitedEatPointViaHiveAction / GoToUnvisitedEatPointAvoidHiveAction → EatAction
 剩余时间 ≤ PARK_TIME_THRESHOLD_MS → ActionRunner.clear() + AdaptiveParkAction
 ```
+
+**整周期组合（可选，见 13 / 14 节）**：
+
+```java
+actionRunner.add(new AutoCycleAction(teamColor, sweeper, goal));        // 保守版：取球点停车吃球
+actionRunner.add(new ContinuousRouteAction(teamColor, sweeper, goal));  // 激进版：单条轨迹不停车
+```
+
+两者都只需在 `actionRunner` 空闲时投递即可，后续周期重复投递。
 
 ## 自动阶段主程序（AutoRed / AutoBlue）
 
@@ -340,6 +467,10 @@ STOP
 > `AdaptiveParkAction` 没有独立测试 OpMode：它的触发依赖比赛计时与自动阶段完整流程，
 > 请通过 `AutoRed` / `AutoBlue` 实机联调验证（重点观察 T-3s 是否停车、接触时是否向场内移动、
 > Dashboard 的 `AdaptivePark park x/y` 是否为场内位置）。
+>
+> `AutoCycleAction` / `ContinuousRouteAction` 同样暂无独立测试 OpMode：它们由上表 Action 组合而成，
+> 建议先逐个验证被组合的 Action，再在 `AutoBlue` 中接入联调；也可参照 `ActionTestBase`
+> 新增一个只运行单个组合 Action 的测试 OpMode。
 
 **Init 阶段按键选择**：
 
