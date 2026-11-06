@@ -74,7 +74,13 @@ public class FlywheelParams {
     /** 速度量化台阶 (tick/s)：编码器测速最小分辨率（用于误差带下限、kp 告警、滤波拐点） */
     public double quantStep;
 
-    /** 稳态误差带比例：{@code eBand = max(settleFrac·|ω*|, 2·quantStep)} */
+    /**
+     * 稳态误差带比例：{@code eBand = max(settleFrac·|ω*|, 2·quantStep)}。
+     *
+     * <p>eBand 同时是到位判据和积分门限（{@code |e| < eBand} 才积分）。SimpleShooter 分支
+     * 把积分门限换成固定 iZone=120 tick/s，被否决：低目标下等于把准入放宽 3 倍
+     * （0→600 过冲 +4.5→+11.0 tick/s）。门限必须随目标缩放。
+     */
     public double settleFrac;
 
     /** 连续落在误差带内多少帧算「到位」（10 帧 ≈ 0.1 s） */
@@ -94,12 +100,13 @@ public class FlywheelParams {
     /** 调度上拐点（倍 eBand）：{@code |e| ≥ eHiFrac·eBand} 用 tauVMin */
     public double eHiFrac;
 
-    // ---------------- 掉速判定与积分冻结 ----------------
+    // ---------------- 积分冻结 ----------------
+    //
+    // 第 4 代原有 dropEnterFrac（进掉速态的门限，倍 eBand）+ inDrop 滞回，已整体删除
+    // （2026-11-06，见 FlywheelCalculator 类注释「取舍记录」第 4 条）：实测 inDrop 占比 6.3%，
+    // 模型里删掉后跌深/回带时间/过冲几乎不变。删掉后带外只剩「冻结积分」这一个动作。
 
-    /** 进掉速态的阈值（倍 eBand）：{@code |e| > dropEnterFrac·eBand}；退出用 eBand（滞回） */
-    public double dropEnterFrac;
-
-    /** 掉速态下积分最多冻结多久 (s)，超时强制清零（防误差长期带外导致积分永久失效） */
+    /** 带外冻结积分的最长时长 (s)，超时强制清零（防误差长期带外导致积分永久失效） */
     public double iFreezeTimeoutSec;
 
     // ---------------- 母线电压归一化 ----------------
@@ -119,14 +126,12 @@ public class FlywheelParams {
     /**
      * 母线电压低通时间常数 (s)。必须远大于单发发射造成的电压跌落时长（≈0.4 s），
      * 否则会把「单发掉压」当成「电池没电」，在恢复期末把前馈放大到 &gt;1，人造一次饱和。
+     *
+     * <p>原「掉速期间冻结 + 0.6 s hold-off + 2.0 s 冻结超时」三个参数已随状态机删除。
+     * 这一项现在是唯一的电压瞬态防护：0.4 s 跌落只走完 33%（12.40→12.00 V，s 变化 &lt;0.3%）。
+     * 不要调小，更不要退化成原始读数 {@code s=12/V_raw}（那会让 s 立刻跳 1.071）。
      */
     public double tauBus;
-
-    /** 掉速结束后的电压采样 hold-off (s)：跳过电池 RC 回弹段，避免采样到回弹中段 */
-    public double busHoldOffSec;
-
-    /** 电压采样最长冻结时长 (s)：超时强制重新采样（防长期冻结导致 s 永久失真） */
-    public double busFreezeTimeoutSec;
 
     // ---------------- 装配与范围 ----------------
 
@@ -178,20 +183,20 @@ public class FlywheelParams {
         BIG.eLoFrac = 0.50;        // 0.50·eBand = 20 tick/s = 1 个台阶
         BIG.eHiFrac = 1.50;        // 1.50·eBand = 60 tick/s = 3 个台阶
 
-        // ---- 掉速判定与积分冻结 ----
-        BIG.dropEnterFrac = 3.0;
+        // ---- 积分冻结（掉速态已删除：见 FlywheelCalculator 类注释「取舍记录」第 4 条）----
+        // SimpleShooter 删掉的是整个冻结逻辑、只留固定 iZone=120 tick/s 门限——被否决：
+        // 门限不随目标缩放，低目标下过冲翻倍。这里保留 1.5 s 超时兜底。
         BIG.iFreezeTimeoutSec = 1.5;
 
         // ---- 母线电压归一化（Tune6.7 BusVoltageFilter 定 tauBus）----
         // 2026-10-27 起默认开启：09-02 两份实测（大轮 20:12 vscale≡1、小轮 20:16 vscale≈0.96）
-        // 对比显示开启后前馈随母线跌落自动补偿，掉速期间被冻结（设计如此），判据⑥待 VoltageSweep 收尾。
+        // 对比显示开启后前馈随母线跌落自动补偿，判据⑥待 VoltageSweep 收尾。
+        // 掉速期间冻结已随状态机删除，现在靠 tauBus=1.0 s 低通吸收单发跌压（见字段注释）。
         BIG.useVoltageNorm = true;
         BIG.vBusNominal = 12.0;
         BIG.vScaleMin = 0.85;
         BIG.vScaleMax = 1.25;
         BIG.tauBus = 1.0;
-        BIG.busHoldOffSec = 0.6;
-        BIG.busFreezeTimeoutSec = 2.0;
 
         // ---- 装配与范围 ----
         BIG.motorReversed = true;
@@ -237,8 +242,7 @@ public class FlywheelParams {
         SMALL.eLoFrac = 0.50;
         SMALL.eHiFrac = 1.50;
 
-        // ---- 掉速判定与积分冻结 ----
-        SMALL.dropEnterFrac = 3.0;
+        // ---- 积分冻结（掉速态已删除，同大球）----
         SMALL.iFreezeTimeoutSec = 1.5;
 
         // ---- 母线电压归一化（2026-10-27 实测已开：vscale≈0.96，前馈补齐母线跌落）----
@@ -247,8 +251,6 @@ public class FlywheelParams {
         SMALL.vScaleMin = 0.85;
         SMALL.vScaleMax = 1.25;
         SMALL.tauBus = 1.0;
-        SMALL.busHoldOffSec = 0.6;
-        SMALL.busFreezeTimeoutSec = 2.0;
 
         // ---- 装配与范围：方向与最大转速按小球机构填 ----
         SMALL.motorReversed = true;
@@ -296,15 +298,12 @@ public class FlywheelParams {
         calc.tauVMin = tauVMin;
         calc.eLoFrac = eLoFrac;
         calc.eHiFrac = eHiFrac;
-        calc.dropEnterFrac = dropEnterFrac;
         calc.iFreezeTimeoutSec = iFreezeTimeoutSec;
         calc.useVoltageNorm = useVoltageNorm;
         calc.vBusNominal = vBusNominal;
         calc.vScaleMin = vScaleMin;
         calc.vScaleMax = vScaleMax;
         calc.tauBus = tauBus;
-        calc.busHoldOffSec = busHoldOffSec;
-        calc.busFreezeTimeoutSec = busFreezeTimeoutSec;
     }
 
     /**
@@ -330,15 +329,12 @@ public class FlywheelParams {
         tauVMin = other.tauVMin;
         eLoFrac = other.eLoFrac;
         eHiFrac = other.eHiFrac;
-        dropEnterFrac = other.dropEnterFrac;
         iFreezeTimeoutSec = other.iFreezeTimeoutSec;
         useVoltageNorm = other.useVoltageNorm;
         vBusNominal = other.vBusNominal;
         vScaleMin = other.vScaleMin;
         vScaleMax = other.vScaleMax;
         tauBus = other.tauBus;
-        busHoldOffSec = other.busHoldOffSec;
-        busFreezeTimeoutSec = other.busFreezeTimeoutSec;
         motorReversed = other.motorReversed;
         speedMax = other.speedMax;
     }

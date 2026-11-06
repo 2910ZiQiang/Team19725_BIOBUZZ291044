@@ -44,7 +44,7 @@ import java.util.Map;
  *
  * <h2>CSV</h2>
  * {@code <外部目录>/tuning/VoltageSweep_<时间戳>.csv}，表头
- * {@code t,segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,inDrop,iActive,settled}
+ * {@code t,segment_id,vbus_target,vbus_meas,load_power,target,velocity,duty,error,current,iActive,settled}
  * （`segment_id` = 计划里第几段，段名写在 CSV 注释行）。
  * 出图：{@code python tools/tuning/plot_csv.py <csv> --segment segment_id}。
  *
@@ -128,7 +128,7 @@ public class VoltageSweepOp extends LinearOpMode {
      * 是否发布扁平数值遥测（由 FTC Dashboard 自带 Logging 记录）。
      *
      * <p>键名（Dashboard CSV 的列名）：{@code segment_id, vbus_target, vbus_meas, load_power,
-     * target, velocity, duty, error, current, indrop, iactive, settled}，时间列由 Dashboard 自己加。
+     * target, velocity, duty, error, current, iactive, settled}，时间列由 Dashboard 自己加。
      */
     public static boolean dashboardLog = true;
 
@@ -377,8 +377,8 @@ public class VoltageSweepOp extends LinearOpMode {
                 seg.wheelTarget, shooter.getVelocity(), dutyOf(seg));
         telemetry.addData("电流 / 误差", "%.2f A / %.1f", shooter.getCurrent(), shooter.getError());
         FlywheelCalculator c = shooter.getCalculator();
-        telemetry.addData("inDrop / iActive / settled", "%s / %s / %s",
-                c.isInDrop(), c.isIntegralActive(), c.isSettled());
+        telemetry.addData("iActive / settled", "%s / %s",
+                c.isIntegralActive(), c.isSettled());
         telemetry.update();
     }
 
@@ -394,7 +394,6 @@ public class VoltageSweepOp extends LinearOpMode {
         telemetry.addData("duty", duty);
         telemetry.addData("error", seg.wheelTarget - shooter.getVelocity());
         telemetry.addData("current", shooter.getCurrent());
-        telemetry.addData("indrop", c.isInDrop() ? 1 : 0);
         telemetry.addData("iactive", c.isIntegralActive() ? 1 : 0);
         telemetry.addData("settled", c.isSettled() ? 1 : 0);
         samples.add(new double[]{

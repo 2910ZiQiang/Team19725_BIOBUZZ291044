@@ -127,7 +127,7 @@ python tools/tuning/plot_csv.py ./VoltageSweep_log.csv \
 ### 4.4 遥测键（Dashboard CSV 的列）
 
 `segment_id, vbus_target, vbus_meas, load_power, target, velocity, duty, error,
-current, indrop, iactive, settled`
+current, iactive, settled`
 
 - `segment_id`：计划段编号（`_settle/_a1600/_b1900/_pre/_dip/_rec/_rel` 依次递增），
   段名与电压目标请看程序开跑的遥测屏（或按每段的 `vbus_target` 反查）。

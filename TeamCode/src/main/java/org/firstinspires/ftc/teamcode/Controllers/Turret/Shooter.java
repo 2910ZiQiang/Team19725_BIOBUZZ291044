@@ -320,7 +320,6 @@ public class Shooter {
             telemetry.addData(name + " error filt (tick/s)", "%.0f", calculator.getErrorFiltered());
             telemetry.addData(name + " tauV (ms)", "%.1f", calculator.getTauV() * 1000.0);
             telemetry.addData(name + " eBand (tick/s)", "%.0f", calculator.getErrorBand());
-            telemetry.addData(name + " inDrop", calculator.isInDrop());
             telemetry.addData(name + " settled", calculator.isSettled());
             telemetry.addData(name + " vScale", "%.3f", calculator.getVScale());
             telemetry.addData(name + " vBus filt (V)", "%.2f", calculator.getBusVoltageFiltered());

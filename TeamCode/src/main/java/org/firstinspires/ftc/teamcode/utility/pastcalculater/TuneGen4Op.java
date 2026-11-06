@@ -57,7 +57,7 @@ public class TuneGen4Op extends LinearOpMode {
     public static double logPeriodMs = 10;
 
     static final String CSV_HEADER =
-            "t,target,velocity,error,duty,ff,p,i,inDrop,iActive,settled,vbus,vscale,phase";
+            "t,target,velocity,error,duty,ff,p,i,iActive,settled,vbus,vscale,phase";
 
     // ------------------------------------------------------------ state
 
@@ -280,7 +280,6 @@ public class TuneGen4Op extends LinearOpMode {
         telemetry.addData("ff", calculator.getFfTerm());
         telemetry.addData("p", calculator.getPTerm());
         telemetry.addData("i", calculator.getITerm());
-        telemetry.addData("indrop", b2d(calculator.isInDrop()));
         telemetry.addData("iactive", b2d(calculator.isIntegralActive()));
         telemetry.addData("settled", b2d(calculator.isSettled()));
         telemetry.addData("vbus", driver.getBusVoltage());

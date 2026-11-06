@@ -20,8 +20,8 @@
 `TuningLogger`（CSV 写入工具，不是 OpMode）。
 
 > 第 4 代删除的整定项：`Tune6.2 ZieglerNichols`（与 6.3 方法重复，且其 P-only 实现没有关掉
-> `kS`，测出来的不是纯 P）、`Tune6.4 DropDetection`（boost 已从控制律移除，
-> 掉速判据改为误差带 `dropEnterFrac·eBand`，其阈值由 `eBand` 与量化台阶直接算出，无需整定）。
+> `kS`，测出来的不是纯 P）、`Tune6.4 DropDetection`（boost 已从控制律移除）。2026-11-06 起
+> 掉速状态机（`inDrop` / `dropEnterFrac` / 电压采样冻结）也删除，掉速相关整定项一并消失。
 
 ---
 
@@ -289,8 +289,8 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
 
 ### 注意
 
-- 掉速期间与掉速后 `busHoldOffSec`（0.6 s）内电压采样是**冻结**的，
-  所以 `tauBus` 只影响「电量缓变」的跟随速度，不影响单发跌落——本程序量的是后者。
+- 电压低通是纯 EMA（`tauBus`，已无冻结窗口）：`tauBus` 越大，单发 0.4 s 跌落被压得越平，
+  但「电量缓变」的跟随也越慢。本程序量的是前者，定值时要把后者一起算进去。
 - `R` 明显大于 0.7 Ω 时优先改硬件（新电池/短线束），而不是继续调 `tauBus`。
 
 ---
@@ -321,9 +321,7 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
 | `tauBus` | s | 6.7 |
 | `vBusNominal` | V | 电池额定（12.0；满电实测 12.9~13.1） |
 | `settleFrac` / `settleFrames` | — | 算出来的，不整定（2% / 10 帧） |
-| `dropEnterFrac` | 倍 `eBand` | 由实测跌深推出（默认 3.0） |
 | `iFreezeTimeoutSec` | s | 安全阀（1.5） |
-| `busHoldOffSec` / `busFreezeTimeoutSec` | s | 电池 RC 回弹时间（0.6 / 2.0） |
 
 > 全部增益单位为「占空比」。第 4 代的电压归一化只乘前馈，
 > 因此**增益量纲不变**，不需要像「整条输出 × V_nom/V_bus」那样换算成 V 量纲。
@@ -342,7 +340,7 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
 | ③ `tauVMax` / `tauVMin` | 6.6 | 齐 | 判据 `σ_filt ≤ max(quantStep/2, 0.5%·ω)` |
 | ④ `tauBus` | 6.7 | 齐 | 仅在 `useVoltageNorm=true` 时有意义 |
 | ⑤ `eBand` / `settleFrames` | 无程序（**不需要**） | 齐 | 由 `quantStep` 直接算：`eBand=max(settleFrac·ω*, 2·quantStep)`、`settleFrames=10` |
-| ⑥ `dropEnterFrac` / `iFreezeTimeoutSec` | 无程序（**不需要**） | 齐 | 由 `eBand` 推：进 3 倍带、出 1 倍带；`iFreezeTimeoutSec` 是安全阀 |
+| ⑥ `iFreezeTimeoutSec` | 无程序（**不需要**） | 齐 | 安全阀（1.5 s）；原 `dropEnterFrac` 随掉速状态机删除 |
 
 ### 明确不算「缺口」的遗留项
 
@@ -350,7 +348,7 @@ Start 后按 **A** 全自动跑完（两段），**X** 停转。CSV 前缀 `vf06
    ②稳态 `v_sd/|误差|/duty_sd`、③`|I integral|` 长期值、⑤`isSettled()` 行为、⑥两种电量对比，
    都是「跑 → 记录 → 离线算」。现已由 `FlywheelRun` 提供数据源：数据全部通过 **telemetry**
     打出（键 `target,velocity,duty,voltage,error,current,integral,pTerm,iTerm,ffTerm,vscale,
-    indrop,iactive,settled`），用 **Dashboard 自带 Logging** 记录导出（不再落自定义 CSV），
+    iactive,settled`），用 **Dashboard 自带 Logging** 记录导出（不再落自定义 CSV），
     发射恢复用 `tools/tuning/analyze_launch_events.py`，不同电压的 ⑥ 由
     `OpModes/VoltageSweep/` 的电压扫描程序一次扫完（见该目录 `GUIDE.md`）。
 2. **`ShooterTuningTester`**（`group=Tests`，464 行，含 `MODE_KS/MODE_KV/step/disturb`）

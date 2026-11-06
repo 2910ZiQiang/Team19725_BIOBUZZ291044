@@ -35,7 +35,7 @@ import java.util.Locale;
  * Logging 记录。{@link #dashboardLog} 为 {@code true}（默认）时每 {@link #logPeriodMs} 毫秒发布一组
  * <b>扁平数值键</b>，Dashboard 记下来的 CSV 列名就是这些键：
  * {@code target, velocity, duty, voltage, error, current, integral, pTerm, iTerm, ffTerm,
- * vscale, indrop, iactive, settled}（时间列由 Dashboard 自己加），可直接喂给
+ * vscale, iactive, settled}（时间列由 Dashboard 自己加），可直接喂给
  * {@code tools/tuning} 的出图脚本（见 {@code tools/tuning/PLOT_GUIDE.md}）。
  * 关掉开关则退回给人看的整表遥测（{@code shooter.setTelemetry()}）。
  *
@@ -184,7 +184,6 @@ public class FlywheelRun extends LinearOpMode {
         telemetry.addData("iTerm", calc.getITerm());
         telemetry.addData("ffTerm", calc.getFfTerm());
         telemetry.addData("vscale", calc.getVScale());
-        telemetry.addData("indrop", calc.isInDrop() ? 1 : 0);
         telemetry.addData("iactive", calc.isIntegralActive() ? 1 : 0);
         telemetry.addData("settled", calc.isSettled() ? 1 : 0);
     }
