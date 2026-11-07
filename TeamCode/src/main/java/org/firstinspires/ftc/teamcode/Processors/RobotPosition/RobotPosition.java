@@ -39,6 +39,26 @@ public class RobotPosition {
     /** IMU，复用 Road Runner 已初始化的实例（设备名 "imu"），仅用于 resetYaw() */
     private IMU imu;
 
+    /** 队伍颜色（init 时保存，用于按颜色选择球门） */
+    private TeamColor teamColor = TeamColor.RED;
+
+    /**
+     * 当前瞄准的球门是否位于 AudienceDown 侧。
+     * 由 {@link #update()} 中 MT1 的 HIVE 状态自动推导：
+     * HIVE 在 AUDIENCE_UP 侧 → 打 AudienceUp 门；AUDIENCE_DOWN 侧 → 打 AudienceDown 门；
+     * MIDDLE（侧别不明确）→ 打最近一次非 MIDDLE 抬升侧的<b>相反侧</b>。
+     */
+    private boolean goalDown = false;
+
+    /**
+     * 最近一次非 MIDDLE 的 HIVE 抬升侧（{@code AUDIENCE_UP} / {@code AUDIENCE_DOWN}）。
+     * {@code null} 表示尚未观测到有效抬升侧，此时 MIDDLE 退化为默认的 AudienceUp 门。
+     */
+    private MT1Localizer.HiveState lastLiftedSide = null;
+
+    /** 当前球门的缓存值：在 init 与每帧 update 中刷新，getGoalPose 只读该缓存 */
+    private Pose2d cachedGoalPose = HypParams.RedAudienceUp;
+
     public Pose2d currentPose;
     public PoseVelocity2d currentVelocity2d;
 
@@ -82,6 +102,11 @@ public class RobotPosition {
 
         instance.currentPose = initpose != null ? initpose : new Pose2d(0,0,0);
 
+        // ---- 球门选择：保存队伍颜色并刷新默认球门（AudienceUp） ----
+        instance.teamColor = (teamColor != null) ? teamColor : TeamColor.RED;
+        instance.goalDown = false;
+        instance.cachedGoalPose = instance.goalPose(false);
+
         // ---- 先构造融合定位器：Pinpoint 速度预测 + Limelight 视觉更新 + 自适应 Q/R ----
         // 队伍颜色决定 Limelight pipeline（红 0 / 蓝 1），由 MT1Localizer 按颜色切换。
         Limelight3A limelight = hardwareMap.get(Limelight3A.class, "limelight");
@@ -123,6 +148,20 @@ public class RobotPosition {
             hiveState = mt1.getHiveState();
         }
 
+        // 自动估计瞄准球门：先取本帧 HIVE 状态，再按状态选门
+        //   AUDIENCE_UP   → 瞄准 AudienceUp 侧球门
+        //   AUDIENCE_DOWN → 瞄准 AudienceDown 侧球门
+        //   MIDDLE        → 瞄准最近一次非 MIDDLE 抬升侧的相反侧（从未观测到时默认 AudienceUp）
+        if (hiveState == MT1Localizer.HiveState.AUDIENCE_UP
+                || hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN) {
+            lastLiftedSide = hiveState;
+            goalDown = (hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN);
+        } else {
+            // lastLiftedSide 为 AUDIENCE_UP → 相反侧即 Down；为 DOWN 或 null → Up
+            goalDown = (lastLiftedSide == MT1Localizer.HiveState.AUDIENCE_UP);
+        }
+        cachedGoalPose = goalPose(goalDown);
+
         currentPose = drive.localizer.getPose();
         return currentPose;
     }
@@ -133,6 +172,29 @@ public class RobotPosition {
     public double getX(){     return currentPose.position.x;    }
     public double getY(){   return currentPose.position.y;    }
     public double getTheta(){ return currentPose.heading.toDouble();    }
+
+    // ==================== 球门估计（由 HIVE 状态自动推导，供炮台自动瞄准读取） ====================
+
+    /** @return 当前是否瞄准 AudienceDown 侧球门（由 HIVE 状态自动推导） */
+    public boolean isGoalDown() {
+        return goalDown;
+    }
+
+    /** @return 当前球门点（仅 x/y 有效，heading 无意义） */
+    public Pose2d getGoalPose() {
+        return cachedGoalPose;
+    }
+
+    /**
+     * @param down true = AudienceDown 侧，false = AudienceUp 侧
+     * @return 按队伍颜色选取的球门点
+     */
+    private Pose2d goalPose(boolean down) {
+        if (teamColor == TeamColor.BLUE) {
+            return down ? HypParams.BlueAudienceDown : HypParams.BlueAudienceUp;
+        }
+        return down ? HypParams.RedAudienceDown : HypParams.RedAudienceUp;
+    }
     /** @return 场坐标系 X 轴线速度 (英寸/秒)。输入为体坐标系速度，按 R(θ) 旋转到场坐标系。 */
     public double getVx(){
         double vxBody = currentVelocity2d.linearVel.x;

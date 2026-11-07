@@ -149,6 +149,7 @@ public class AutoAimAction implements Action {
      * 按队伍颜色与 HIVE 抬升状态选择目标球门。
      * MIDDLE 时保持上一次锁定的球门；无历史时默认 AudienceUp。
      */
+    //todo: 重新考虑middle的目标锁定逻辑
     private Pose2d selectGoal(MT1Localizer.HiveState hiveState) {
         Pose2d goal;
         if (teamColor == TeamColor.RED) {
