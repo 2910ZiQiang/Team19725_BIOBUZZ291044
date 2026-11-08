@@ -179,4 +179,9 @@ motor.setPower(output);
 3. 切换 slot 会重置积分、微分状态与 setpoint 历史
 4. `PIDController` 没有 4 参数构造函数，需同时指定 `maxI` 和 `iZone` 时使用 5 参数版本
 5. `PIDSVAController.calculate` 只接收 `setpoint` 与 `measurement`：SVA 前馈的参考速度/加速度由控制器内部按 `setpoint` 的变化率推导（速度闭环时 `setpoint` 即参考速度），因此**不要再传入实测速度**，否则会与微分项相互抵消
-6. 调用 `calculate` 前必须已配置当前 slot（至少 `withSlot0(...)`），否则抛出 `IllegalArgumentException("Slot not configured")`
+6. **位置闭环（`velocityLoop = false`）下 `kS / kV / kA` 有两个必然的行为**（参考量是 setpoint 差分 `(setpoint − prev)/dt`，不是规划轨迹）：
+   - **目标恒定时参考速度为 0 ⇒ `kS·sign(0) = 0`**，静摩擦前馈在"保持位置"时完全失效，只能靠 `kP` 硬扛出静差（`≈ kS/kP`，量纲由 `kS` 的单位决定），且静差方向取决于最后一次运动方向；
+   - **目标阶跃 / 逐帧抖动时参考速度被 `1/dt` 放大**：`1°` 的 setpoint 变化在 20 ms 内会算出数百 tick/s 的参考速度，`kV` 项的占空比冲击可能达到 0.1~0.2。若 setpoint 本身带噪声（例如由位姿逐帧解算出来的目标角），前馈会把噪声当速度响应。
+   
+   因此整定时先置 `kS = kV = kA = 0`，只用 P（必要时加小 I）确认基本功能，再逐项加回；需要速度前馈时应先把 setpoint 做限速/限加速度的平滑。
+7. 调用 `calculate` 前必须已配置当前 slot（至少 `withSlot0(...)`），否则抛出 `IllegalArgumentException("Slot not configured")`

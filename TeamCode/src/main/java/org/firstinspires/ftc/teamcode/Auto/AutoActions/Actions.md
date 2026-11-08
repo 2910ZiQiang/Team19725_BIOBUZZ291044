@@ -182,11 +182,20 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 （`AUDIENCE_UP→Up`、`AUDIENCE_DOWN→Down`、`MIDDLE→保持上次锁定，无历史默认 Up`），
 原地转向使车头对准球门，仅下发角速度、平移为 0。
 
+> ⚠️ **球门规则与炮台不一致**：炮台自动瞄准读 `RobotPosition.getGoalPose()`，它的 `MIDDLE`
+> 规则是「上次抬升侧的**相反侧**」，与本 Action 的「保持上次锁定侧」在 `MIDDLE` 时结论相反。
+> 即：同一物理状态下本 Action 转的车头方向可能与炮台指向的球门相反。详见
+> `Controllers/Turret/TurretGuide.md` §13 第 1 条。
+
 **控制律**：期望航向 `des = atan2(goalY-y, goalX-x)`，误差归一化到 `[-π,π]`
 后做 PD：`omega = Kp·e + Kd·de/dt`，死区内输出 0，输出限幅。
 
 **完成条件**：航向误差与实际角速度同时小于容差并持续 `settleMs` 毫秒；
-超过 `timeoutMs` 强制结束（交上层状态机处理）。
+超过 `timeoutMs` 强制结束。
+
+> ⚠️ **超时与成功都返回 `false`**（都走 `finish()`），`SequentialAction` / `ActionRunner`
+> 无法区分两者，只有遥测 `AutoAim = Timeout / Aligned` 能区分。若要用它做"对齐成功才允许
+> 发射"的门控，必须自己加判据（例如对齐后读遥测或检查 `|error|`）。
 
 **Dashboard 可调参数**：
 

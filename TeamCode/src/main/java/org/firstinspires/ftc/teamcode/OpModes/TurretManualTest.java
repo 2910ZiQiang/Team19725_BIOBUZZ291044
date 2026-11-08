@@ -19,12 +19,10 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.YawController;
  *
  * <p><b>手柄映射（二操）</b>
  * <ul>
- *   <li>左摇杆 上下 → 小球 Shooter 仰角（映射到
- *       {@code [Shooter.SMALL_PARAMS.pitchMin, pitchMax]}）</li>
- *   <li>右摇杆 上下 → 大球 Shooter 仰角（映射到
- *       {@code [Shooter.BIG_PARAMS.pitchMin, pitchMax]}）</li>
  *   <li>左摇杆 左右 → yaw 平转（映射到 {@code [-yawRange, +yawRange]}；
  *       约定"推右 → 顺时针（负 yaw）"）</li>
+ *   <li>小球 / 大球仰角舵机位置 → 由 Dashboard 的 {@link #targetPitchSmall} /
+ *       {@link #targetPitchBig} 直接设置，手柄不控制仰角</li>
  *   <li>方向键 上 / 下 → 大球飞轮目标转速 ±{@link #speedStep}，范围 0 至
  *       {@code Shooter.BIG_PARAMS.speedMax}</li>
  *   <li>方向键 右 / 左 → 小球飞轮目标转速 ±{@link #speedStep}，范围 0 至
@@ -46,6 +44,11 @@ public class TurretManualTest extends LinearOpMode {
     public static int speedStep = 100;
     /** 长按方向键的连续步进周期（毫秒） */
     public static int repeatPeriodMs = 120;
+
+    /** 大球仰角舵机目标位置 [0,1]，由 Dashboard 直接设置 */
+    public static double targetPitchBig = 0.5;
+    /** 小球仰角舵机目标位置 [0,1]，由 Dashboard 直接设置 */
+    public static double targetPitchSmall = 0.5;
 
     /** intake 电机在 Robot Configuration 中的名称（改动后需重新 Init） */
     public static String intakeMotorName = "sweeperMotor";
@@ -75,7 +78,7 @@ public class TurretManualTest extends LinearOpMode {
         intakeMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         intakeMotor.setPower(0);
 
-        telemetry.addLine("GP2 LstickY: small pitch | RstickY: big pitch | LstickX: yaw");
+        telemetry.addLine("GP2 LstickX: yaw | pitch from Dashboard (targetPitchBig/Small)");
         telemetry.addLine("GP2 Dpad U/D: big speed | Dpad L/R: small speed");
         telemetry.addLine("GP2 LB: small trigger | RB: big trigger");
         telemetry.addLine("GP2 RT: intake power");
@@ -84,11 +87,9 @@ public class TurretManualTest extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
-            // ---- 摇杆：上推时 axis = -1，取负号使"上 → 增大" ----
-            double pitchSmall = axisToRange(-gamepad2.left_stick_y,
-                    Shooter.SMALL_PARAMS.pitchMin, Shooter.SMALL_PARAMS.pitchMax);
-            double pitchBig = axisToRange(-gamepad2.right_stick_y,
-                    Shooter.BIG_PARAMS.pitchMin, Shooter.BIG_PARAMS.pitchMax);
+            // ---- 摇杆：仰角改由 Dashboard 设置，手柄只控制 yaw ----
+            double pitchSmall = targetPitchSmall;
+            double pitchBig = targetPitchBig;
             // 推右（axis = +1）→ 顺时针，对应负 yaw
             targetYaw = -gamepad2.left_stick_x * YawController.yawRange;
 
@@ -115,6 +116,8 @@ public class TurretManualTest extends LinearOpMode {
             telemetry.addData("Target yaw (deg)", "%.1f", Math.toDegrees(targetYaw));
             telemetry.addData("Target speed big (tick/s)", targetSpeedBig);
             telemetry.addData("Target speed small (tick/s)", targetSpeedSmall);
+            telemetry.addData("Target pitch big", "%.3f", targetPitchBig);
+            telemetry.addData("Target pitch small", "%.3f", targetPitchSmall);
             telemetry.addData("Fire ready big", ready.big);
             telemetry.addData("Fire ready small", ready.small);
             telemetry.addData("speedStep", speedStep);
@@ -135,12 +138,6 @@ public class TurretManualTest extends LinearOpMode {
             min = Math.min(min, sensor.getVoltage());
         }
         return min;
-    }
-
-    /** 摇杆位置 [-1, 1] 线性映射到 [lo, hi] */
-    private static double axisToRange(double axis, double lo, double hi) {
-        double t = Math.max(0, Math.min(1, (axis + 1) / 2));
-        return lo + t * (hi - lo);
     }
 
     private static int clamp(int v, int lo, int hi) {

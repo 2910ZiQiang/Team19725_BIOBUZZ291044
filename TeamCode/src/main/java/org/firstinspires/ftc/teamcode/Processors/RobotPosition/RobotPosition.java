@@ -44,9 +44,9 @@ public class RobotPosition {
 
     /**
      * 当前瞄准的球门是否位于 AudienceDown 侧。
-     * 由 {@link #update()} 中 MT1 的 HIVE 状态自动推导：
+     * 由 {@link #update()} 中 MT1 的 HIVE 状态自动推导，<b>全程只有一条约定（抬升侧 = 打同侧）</b>：
      * HIVE 在 AUDIENCE_UP 侧 → 打 AudienceUp 门；AUDIENCE_DOWN 侧 → 打 AudienceDown 门；
-     * MIDDLE（侧别不明确）→ 打最近一次非 MIDDLE 抬升侧的<b>相反侧</b>。
+     * MIDDLE（侧别不明确）→ <b>保持上一次选择</b>（不翻转）；从未观测到抬升侧时默认 AudienceUp。
      */
     private boolean goalDown = false;
 
@@ -148,18 +148,20 @@ public class RobotPosition {
             hiveState = mt1.getHiveState();
         }
 
-        // 自动估计瞄准球门：先取本帧 HIVE 状态，再按状态选门
+        // 自动估计瞄准球门：全程只有一条约定 —— 抬升侧 = 打同侧
         //   AUDIENCE_UP   → 瞄准 AudienceUp 侧球门
         //   AUDIENCE_DOWN → 瞄准 AudienceDown 侧球门
-        //   MIDDLE        → 瞄准最近一次非 MIDDLE 抬升侧的相反侧（从未观测到时默认 AudienceUp）
+        //   MIDDLE        → 保持上一次选择（不翻转）；从未观测到抬升侧时默认 AudienceUp
+        // 早期实现让 MIDDLE 取「最近一次抬升侧的相反侧」，与上面两个分支的符号约定相反：
+        // HIVE 只要抖出一帧 MIDDLE，目标就翻到对侧，炮台随即 180° 回转、档位与转速目标全变。
         if (hiveState == MT1Localizer.HiveState.AUDIENCE_UP
                 || hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN) {
             lastLiftedSide = hiveState;
             goalDown = (hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN);
-        } else {
-            // lastLiftedSide 为 AUDIENCE_UP → 相反侧即 Down；为 DOWN 或 null → Up
-            goalDown = (lastLiftedSide == MT1Localizer.HiveState.AUDIENCE_UP);
+        } else if (lastLiftedSide == null) {
+            goalDown = false;   // 尚未观测到有效抬升侧：默认 AudienceUp
         }
+        // MIDDLE 且有历史：goalDown 保持不变（滞回，与"抬升侧=同侧"同一约定）
         cachedGoalPose = goalPose(goalDown);
 
         currentPose = drive.localizer.getPose();
