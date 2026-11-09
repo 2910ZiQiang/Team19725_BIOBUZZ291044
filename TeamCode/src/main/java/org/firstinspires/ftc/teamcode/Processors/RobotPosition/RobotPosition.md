@@ -58,6 +58,24 @@ public void loop() {
 | `getY()` | `double` | 获取 Y 坐标（英寸） |
 | `getTheta()` | `double` | 获取航向角（弧度） |
 
+### 球门选择（供自动瞄准 / 车头瞄准使用）
+
+| 方法 | 说明 |
+|------|------|
+| `getGoalPose()` | 当前瞄准球门点（仅 x/y 有效，heading 无意义），由 `update()` 每帧刷新 |
+| `isGoalDown()` | 当前是否瞄准 AudienceDown 侧 |
+| `setManualGoalDown(boolean)` | 操作手手动指定球门（TeleOp 中映射为 GP2.LT/RT） |
+
+选择优先级（每次 `update()` 按此刷新）：
+
+1. **本帧 MT1 非 MIDDLE 观测**（`AUDIENCE_UP` / `AUDIENCE_DOWN`）→ 直接决定球门（抬升侧 = 打同侧）；
+2. 否则保持上一帧选择：最近一次非 MIDDLE 读数，或操作手通过 `setManualGoalDown()` 的设置；
+3. 从未观测到抬升侧且未手动设置 → 默认 AudienceUp。
+
+> 注意：手动设置应在同一帧 `update()` **之前**调用。`update()` 只在本帧 MT1 解出非 MIDDLE 观测时覆盖手动值；MT1 无读数或 MIDDLE 时手动值保持。
+>
+> TeleOp 中 GP1.LT/RT 的车头瞄准**不**走这里（不调用 `setManualGoalDown`），只临时选择车头球门，不影响 `getGoalPose()`。
+
 ### 速度信息获取
 
 | 方法 | 返回值 | 说明 |

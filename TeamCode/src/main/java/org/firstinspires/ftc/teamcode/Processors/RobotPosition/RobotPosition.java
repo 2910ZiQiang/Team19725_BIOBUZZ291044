@@ -44,15 +44,18 @@ public class RobotPosition {
 
     /**
      * 当前瞄准的球门是否位于 AudienceDown 侧。
-     * 由 {@link #update()} 中 MT1 的 HIVE 状态自动推导，<b>全程只有一条约定（抬升侧 = 打同侧）</b>：
+     * 非 MIDDLE 观测期间由 {@link #update()} 按 MT1 的 HIVE 状态自动推导；
+     * 无有效观测（本帧无读数或 MIDDLE）时保持上一帧选择，并允许
+     * {@link #setManualGoalDown(boolean)} 手动改写。<b>全程只有一条约定（抬升侧 = 打同侧）</b>：
      * HIVE 在 AUDIENCE_UP 侧 → 打 AudienceUp 门；AUDIENCE_DOWN 侧 → 打 AudienceDown 门；
-     * MIDDLE（侧别不明确）→ <b>保持上一次选择</b>（不翻转）；从未观测到抬升侧时默认 AudienceUp。
+     * 从未观测到抬升侧且未手动设置时默认 AudienceUp。
      */
     private boolean goalDown = false;
 
     /**
-     * 最近一次非 MIDDLE 的 HIVE 抬升侧（{@code AUDIENCE_UP} / {@code AUDIENCE_DOWN}）。
-     * {@code null} 表示尚未观测到有效抬升侧，此时 MIDDLE 退化为默认的 AudienceUp 门。
+     * 最近一次有效的抬升侧（{@code AUDIENCE_UP} / {@code AUDIENCE_DOWN}）。
+     * 由 MT1 的非 MIDDLE 观测或操作手手动设置（{@link #setManualGoalDown(boolean)}）更新。
+     * {@code null} 表示尚未观测到有效抬升侧，此时退化为默认的 AudienceUp 门。
      */
     private MT1Localizer.HiveState lastLiftedSide = null;
 
@@ -144,18 +147,22 @@ public class RobotPosition {
 
         // HIVE 状态跟踪：MT1 成功解出倾角观测时更新，否则保持上一状态
         MT1Localizer mt1 = fusionLocalizer.getMT1();
-        if (mt1.isHiveEstimated()) {
+        boolean freshObservation = mt1.isHiveEstimated();
+        if (freshObservation) {
             hiveState = mt1.getHiveState();
         }
 
         // 自动估计瞄准球门：全程只有一条约定 —— 抬升侧 = 打同侧
         //   AUDIENCE_UP   → 瞄准 AudienceUp 侧球门
         //   AUDIENCE_DOWN → 瞄准 AudienceDown 侧球门
-        //   MIDDLE        → 保持上一次选择（不翻转）；从未观测到抬升侧时默认 AudienceUp
+        //   MIDDLE / 本帧无观测 → 保持上一帧选择（含操作手手动设置）
+        // 只有本帧真正拿到非 MIDDLE 观测时才覆盖；这样操作手输入在 MT1 无读数或
+        // MIDDLE 时不会每帧被上一帧的残留状态冲掉。
         // 早期实现让 MIDDLE 取「最近一次抬升侧的相反侧」，与上面两个分支的符号约定相反：
         // HIVE 只要抖出一帧 MIDDLE，目标就翻到对侧，炮台随即 180° 回转、档位与转速目标全变。
-        if (hiveState == MT1Localizer.HiveState.AUDIENCE_UP
-                || hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN) {
+        if (freshObservation
+                && (hiveState == MT1Localizer.HiveState.AUDIENCE_UP
+                || hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN)) {
             lastLiftedSide = hiveState;
             goalDown = (hiveState == MT1Localizer.HiveState.AUDIENCE_DOWN);
         } else if (lastLiftedSide == null) {
@@ -185,6 +192,22 @@ public class RobotPosition {
     /** @return 当前球门点（仅 x/y 有效，heading 无意义） */
     public Pose2d getGoalPose() {
         return cachedGoalPose;
+    }
+
+    /**
+     * 操作手手动指定当前瞄准球门（TeleOp 中由副控 LT/RT 映射而来）。
+     *
+     * <p>优先级：MT1 本帧的<b>非 MIDDLE</b> 观测最高，{@link #update()} 会覆盖本选择；
+     * 无有效观测时本选择生效，并作为"最近一次抬升侧"保持，直到出现新的非 MIDDLE 观测。
+     * 因此应在同一帧的 {@link #update()} <b>之前</b>调用。
+     *
+     * @param down true = AudienceDown 侧球门，false = AudienceUp 侧球门
+     */
+    public void setManualGoalDown(boolean down) {
+        goalDown = down;
+        lastLiftedSide = down ? MT1Localizer.HiveState.AUDIENCE_DOWN
+                : MT1Localizer.HiveState.AUDIENCE_UP;
+        cachedGoalPose = goalPose(down);
     }
 
     /**

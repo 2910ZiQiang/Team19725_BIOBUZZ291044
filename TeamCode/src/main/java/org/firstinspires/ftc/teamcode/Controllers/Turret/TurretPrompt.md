@@ -15,7 +15,7 @@
   - RelPosSmall: 小球发射器中心在地面投影在相对坐标系的坐标，单位inch
   - fireHoldTime: 自动发射时扳机的最短连续释放时间（秒），吸收就绪状态的逐帧抖动；取消发射、平转超限、强制释放松手时立即关闭
   另提供两个重载（三个 update 语义不同，不要混用）：
-  - `update(allowFire, preload, forceReleaseBig, forceReleaseSmall)`：自动瞄准，位姿与球门由 `RobotPosition` 提供，行为见 AutoAimPrompt.md
+  - `update(allowFire, preload, forceReleaseBig, forceReleaseSmall)`：自动瞄准，位姿与球门由 `RobotPosition` 提供（球门来自 `getGoalPose()`，优先级：本帧 MT1 非 MIDDLE 观测 > TeleOp GP2.LT/RT 手动设置 > 上一帧保持），行为见 AutoAimPrompt.md
   - `updateManual(yawRate, pitchBig, pitchSmall, speedBig, speedSmall, triggerBig, triggerSmall)`：手动瞄准，输入是**平转角速度**（弧度/秒，逆时针为正），由 `Turret` 积分成被维持的角度，再按 RELATIVE / ABSOLUTE / GOAL 三种模式映射成车体相对 yaw
 - YawController.java：负责平转机构的控制，提供一个update函数，每帧调用设置目标平转角度，钳制到预设范围内，计算电机目标位置，使用PIDSVA控制电机达到目标位置
     超参数：

@@ -27,8 +27,8 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  * <p><b>主控（gamepad1）</b>
  * <ul>
  *   <li>左摇杆 → 底盘平移；右摇杆 X → 底盘旋转</li>
- *   <li>LT / RT → 按住时车头自动指向<b>炮台当前球门</b>（与自动瞄准同一来源，见
- *       {@link #chassisAimGoal(boolean)}），松开恢复常规驾驶</li>
+ *   <li>LT / RT → 按住时车头指向由该扳机选择的球门（颜色映射与副控球门选择一致，
+ *       见 {@link #chassisAimGoal(boolean)}），松开恢复常规驾驶；<b>不改写炮台球门</b></li>
  *   <li>X → 切换无头模式；A → 重置定位到本方 ResetPose</li>
  *   <li>LB → 吃球；RB → 吐出</li>
  * </ul>
@@ -37,6 +37,8 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  * <ul>
  *   <li>B（按下） → 切换 <b>自动瞄准 / 手动瞄准</b>，默认自动瞄准</li>
  *   <li>Y（按下） → 切换预载开关（仅自动瞄准生效）</li>
+ *   <li>LT / RT（按住） → 手动选择球门：红方 LT = AudienceDown、RT = AudienceUp，
+ *       蓝方相反；MT1 非 MIDDLE 读数优先，无有效读数时保持本选择</li>
  *   <li>自动瞄准：A（按住） → 允许发射；LB → 小球强制释放；RB → 大球强制释放</li>
  *   <li>X（按下） → 循环手动平转模式 RELATIVE → ABSOLUTE → GOAL（仅手动瞄准生效）</li>
  *   <li>手动瞄准：左摇杆 Y → 小球仰角，右摇杆 Y → 大球仰角；
@@ -88,32 +90,27 @@ public abstract class TeleOpMainBase extends LinearOpMode {
     protected abstract Pose2d defaultStopPose();
 
     /**
-     * 无定位实例时车头瞄准的兜底球门。
+     * GP1 LT / RT 对应的车头瞄准球门。
      *
-     * <p><b>正常情况下本方法不参与瞄准</b>：车头与炮台必须指向同一个球门，
-     * 因此 {@link #chassisAimGoal(boolean)} 优先取 {@link RobotPosition#getGoalPose()}
-     * （炮台自动瞄准用的同一个来源）。只有 {@link RobotPosition} 尚未初始化时才退回到这里，
-     * 而那种情况下炮台自己也会走"无有效定位"的安全分支，不存在两条瞄准链。
+     * <p>颜色映射与副控（GP2）的球门选择一致：红方 LT = AudienceDown、RT = AudienceUp，
+     * 蓝方相反。各子类按自身颜色返回对应球门。
      *
      * @param leftTrigger true = 左扳机 (LT)，false = 右扳机 (RT)
      */
     protected abstract Pose2d aimGoal(boolean leftTrigger);
 
     /**
-     * 车头瞄准目标：与炮台自动瞄准取<b>同一个</b>球门。
+     * 车头瞄准目标：由 GP1 LT / RT 直接选择，规则与 GP2 的球门选择一致。
      *
-     * <p>历史实现里车头按固定的 Up/Down 门转向（由 LT / RT 选择），而炮台读的是
-     * {@link RobotPosition#getGoalPose()} 按 HIVE 状态自动选择的门。两者分居场地两端时，
-     * 会出现"车头对着 A 门、炮口对着 B 门"的矛盾状态，操作手无法从画面判断以哪个为准。
-     * 现在统一为同一来源；LT / RT 保留为"按住即让车头指向当前球门"。
+     * <p>本方法<b>不修改</b> {@link RobotPosition#getGoalPose()}，也不调用
+     * {@link RobotPosition#setManualGoalDown(boolean)}；它只影响按住扳机期间的车头朝向，
+     * 便于操作手临时转动底盘，而炮台/共享球门保持原选择。
      *
-     * @param leftTrigger true = 左扳机 (LT)，false = 右扳机 (RT)，仅在无定位实例时用于兜底
+     * @param leftTrigger true = 左扳机 (LT)，false = 右扳机 (RT)
      * @return 车头瞄准目标
      */
     protected Pose2d chassisAimGoal(boolean leftTrigger) {
-        RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
-        Pose2d goal = (robotPosition != null) ? robotPosition.getGoalPose() : null;
-        return (goal != null) ? goal : aimGoal(leftTrigger);
+        return aimGoal(leftTrigger);
     }
 
     @Override
@@ -138,7 +135,7 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         telemetry.addData("--- P1: 底盘 / 吃球 ---", "");
         telemetry.addData("Left Stick", "Chassis Drive");
         telemetry.addData("Right Stick X", "Chassis Rotation (disabled while aiming)");
-        telemetry.addData("Left / Right Trigger", "Aim current goal, shared with turret (hold)");
+        telemetry.addData("Left / Right Trigger", "Aim goal selected by LT / RT (hold)");
         telemetry.addData("X", "Toggle No-Head Mode");
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
@@ -146,6 +143,7 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         telemetry.addData("--- P2: 炮台 ---", "");
         telemetry.addData("B", "Toggle Auto / Manual Aim (auto by default)");
         telemetry.addData("Y", "Toggle Preload (auto aim only)");
+        telemetry.addData("P2: LT / RT", "Manual goal: Down / Up (RED), Up / Down (BLUE)");
         telemetry.addData("Auto: A", "Fire (hold)");
         telemetry.addData("Auto: LB / RB", "Force release small / big");
         telemetry.addData("Manual: Sticks", "LstickY small pitch | RstickY big pitch | LstickX yaw rate");
@@ -158,6 +156,17 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
+            // ======== 球门选择：操作手手动指定（MT1 非 MIDDLE 读数优先级更高） ========
+            // 放在 update() 之前：update() 会用本帧 MT1 的非 MIDDLE 观测覆盖手动选择；
+            // 没有有效观测时保持上一帧读数或本次操作手输入。
+            if (gamepad2.left_trigger > 0.5) {
+                // 红方 LT → AudienceDown；蓝方 LT → AudienceUp
+                RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.RED);
+            } else if (gamepad2.right_trigger > 0.5) {
+                // 红方 RT → AudienceUp；蓝方 RT → AudienceDown
+                RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.BLUE);
+            }
+
             RobotPosition.getInstance().update();
 
             // ======== P1：底盘 ========
@@ -234,6 +243,8 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             }
             // 车头与炮台共用的球门（单一来源，便于操作手确认"打的是哪一个门"）
             Pose2d sharedGoal = RobotPosition.getInstance().getGoalPose();
+            telemetry.addData("Aim goal side", RobotPosition.getInstance().isGoalDown()
+                    ? "AUDIENCE_DOWN" : "AUDIENCE_UP");
             telemetry.addData("Aim goal (shared)", "(%+.1f, %+.1f)",
                     sharedGoal.position.x, sharedGoal.position.y);
             telemetry.addData("Fire ready big", ready.big);

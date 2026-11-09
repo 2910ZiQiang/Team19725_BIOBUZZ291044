@@ -50,12 +50,18 @@
 
 入口：[Turret.update(allowFire, preload, forceReleaseBig, forceReleaseSmall)](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/firstinspires/ftc/teamcode/Controllers/Turret/Turret.java#L208-L346)，每帧调用一次。
 
-> **球门来源**：`Turret` 自己不选门，每帧读 `RobotPosition.getGoalPose()`（其缓存值由 `RobotPosition.update()` 按 MT1 的 HIVE 状态刷新）：
+> **球门来源**：`Turret` 自己不选门，每帧读 `RobotPosition.getGoalPose()`。该缓存由 `RobotPosition.update()` 按以下优先级刷新：
 >
-> - `AUDIENCE_UP` → 本颜色的 `*AudienceUp`；`AUDIENCE_DOWN` → `*AudienceDown`；
-> - `MIDDLE`（HIVE 水平 / 侧别不明）→ **最近一次非 MIDDLE 抬升侧的相反侧**；从未观测到抬升侧时默认 Up。
+> 1. **本帧 MT1 非 MIDDLE 观测**（`AUDIENCE_UP` / `AUDIENCE_DOWN`）优先级最高，直接决定球门；
+> 2. 否则保持上一帧选择（最近一次非 MIDDLE 读数，或 TeleOp 中操作手通过 GP2.LT/RT 的手动设置）；
+> 3. 从未观测到抬升侧、操作手也未设置时默认 Up。
 >
-> ⚠️ 自动阶段底盘用的 `AutoAimAction` 是**另一套规则**（`MIDDLE` 时保持上一次锁定的同一侧），两处并存且 `MIDDLE` 时结论相反：同一物理状态下底盘车头与炮台可能指向相反的球门。两者尚未统一，详见第 13 节。
+> - `AUDIENCE_UP` → 本颜色的 `*AudienceUp`；`AUDIENCE_DOWN` → `*AudienceDown`（抬升侧 = 打同侧）。
+> - 操作手手动入口：`RobotPosition.setManualGoalDown(boolean)`（TeleOp 按键映射见 §10）。
+>
+> ⚠️ 自动阶段底盘用的 `AutoAimAction` 仍是**独立实现**：它也按「抬升侧 = 同侧、`MIDDLE` 保持上次锁定」选择球门，当前与 `RobotPosition` 结论一致；但它直接读融合位姿 / `getHiveState()`，尚未改为读 `RobotPosition.getGoalPose()`，也不响应操作手手动设置。详见第 13 节。
+>
+> ⚠️ TeleOp 中 GP1.LT/RT 的车头瞄准**不读** `RobotPosition.getGoalPose()`：它按扳机与颜色直接选择车头球门（见 §10），只影响车头朝向，不改写炮台/共享球门。因此按住 GP1 扳机时车头与炮口可能暂时指向不同球门，这是有意保留的操作便利。
 
 ### 3.1 发射器实际位置
 
@@ -581,7 +587,7 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | --- | --- |
 | 左摇杆 | 平移 |
 | 右摇杆 X | 旋转 |
-| LT / RT | 车头对准球门（`aimGoal(true/false)`，按颜色/抬升侧选择） |
+| LT / RT | 按住时车头直接瞄准 `aimGoal(true/false)` 选定的球门：红方 LT = AudienceDown / RT = AudienceUp，蓝方相反；只影响车头，不写回炮台球门 |
 | X | 无头模式切换（field-centric / robot-centric） |
 | A | 重置定位到 `ResetPose` |
 | LB / RB | 集球器 吃球 / 输出 |
@@ -592,6 +598,7 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | --- | --- |
 | **B** | 切换 **AUTO / MANUAL** |
 | **Y** | 切换预载（`preload`） |
+| **LT / RT（按住）** | 手动选择炮台球门：红方 LT = AudienceDown / RT = AudienceUp，蓝方相反；仅在本帧 MT1 无有效（非 MIDDLE）读数时生效，并保持到下一次有效读数 |
 | **X** | 循环手动模式 `RELATIVE → ABSOLUTE → GOAL` |
 | **A（按住）** | 自动模式：允许发射（松开即取消，扳机立即关闭） |
 | RB / LB | 自动模式：强制释放 大球 / 小球扳机（无视就绪）<br>手动模式：大球 / 小球扳机 |
@@ -602,6 +609,8 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | 十字键 左/右 | 小球目标转速 ±100 tick/s |
 
 自动模式调用 `turret.update(allowFire, preload, forceBig, forceSmall)`；手动模式调用 `turret.updateManual(...)`。
+
+遥测 `Aim goal side` / `Aim goal (shared)` 显示炮台当前球门；按住 GP1 扳机时车头可能临时指向另一个门，属预期。
 
 ### 操作要点
 
@@ -670,7 +679,7 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 
 | # | 现象 | 位置 | 影响 |
 | --- | --- | --- | --- |
-| 1 | 球门选择曾有两套相反规则：`RobotPosition` 的 `MIDDLE` 取上次抬升侧的**相反侧**，`AutoAimAction` 的 `MIDDLE` **保持上次锁定侧** | `RobotPosition.java`、`AutoAimAction.java:153-168` | **已修**：`RobotPosition` 统一为"抬升侧=同侧，MIDDLE 保持上次选择"。`AutoAimAction` 仍是独立实现（自动阶段尚未接入 `Turret`，故当前不冲突）；待办：`AutoAimAction` 改为直接读 `RobotPosition.getGoalPose()` |
+| 1 | 球门选择曾有两套相反规则：`RobotPosition` 的 `MIDDLE` 取上次抬升侧的**相反侧**，`AutoAimAction` 的 `MIDDLE` **保持上次锁定侧** | `RobotPosition.java`、`AutoAimAction.java:153-168` | **已修**：`RobotPosition` 统一为"抬升侧=同侧，`MIDDLE`/无读数保持上次选择（含 GP2.LT/RT 手动输入），本帧非 MIDDLE 观测优先"。`AutoAimAction` 仍是独立实现（自动阶段尚未接入 `Turret`，故当前不冲突）；待办：`AutoAimAction` 改为直接读 `RobotPosition.getGoalPose()` |
 | 2 | `AutoAimAction` 的超时与成功都 `return false`，只有遥测 `AutoAim=Timeout` 能区分 | `AutoAimAction.java:135-137,171-180` | 用 `SequentialAction` / `ActionRunner` 无法做"对齐成功才允许发射"的门控 |
 | 3 | 平转 SVA 前馈取 setpoint 差分 | `PIDSVAController.java:116-134` | 静止时静摩擦前馈消失（方向性静差）、逐帧噪声被 `1/dt` 放大（自动模式抖动）。见 §7.2 |
 | 4 | `autoYawFeasible` 分支在默认 `yawRange = π` 下不可达（平分角恒在 (-π, π]） | `Turret.java:256` | 保留无害，但"平转超限"路径实际从未被验证，只有调小 `yawRange` 才会生效 |
@@ -678,6 +687,7 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | 6 | `Turret.measuredYaw()` 直接读电机编码器，绕过"硬件只在 update 内采样"的约定 | `Turret.java:534-540` | 仅手动模式首帧初始化使用，影响很小；但与 `4e220d8` 的约定冲突 |
 | 7 | `Vector2D.normalizeAngle` 用 while 循环逐次 ±2π，末尾还有一次 `fromPolar(...).getRadian()` 冗余往返 | `Vector2D.java:178-190` | 当前所有调用点输入有界，暂不触发；若把未限幅的积分量传进来，极小概率长时间空转 |
 | 8 | `getMinPitch()` / `getMaxPitch()` 依赖档位表按 `pitchPos` 升序，无校验 | `Shooter.java:432-449` | 表未排序时静默给出错误的预载安全姿态 |
+| 9 | TeleOp 球门有三条入口：MT1 非 MIDDLE 观测、GP2.LT/RT 手动设置、GP1.LT/RT 车头独立选门 | `RobotPosition.java`、`TeleOpMainBase.java` | 前两者写入同一个共享球门（MT1 本帧观测优先，否则保持含手动输入）；GP1 只在按住扳机时改车头目标，不写回共享球门，故车头/炮口可暂时指向不同门（有意设计） |
 
 ### 本次文档同步的改动
 
@@ -691,8 +701,15 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | 级别 | 问题 | 修复 | 涉及文件 |
 | --- | --- | --- | --- |
 | P0 | 触发保持窗口只比时间、不校验指向，球门切换或底盘转动时可带着约 18° 偏角连续出球 | 保持分支追加 `yawHoldOk = autoYawFeasible && yawReady` | `Turret.java`（`update(boolean,boolean,boolean,boolean)`） |
-| P0 | 车头按固定 Up/Down 门转向、炮台按 HIVE 动态门瞄准，两者可指向相反球门 | 新增 `chassisAimGoal(boolean)`：优先取 `RobotPosition.getGoalPose()`，与炮台同源；`aimGoal()` 降级为无定位时的兜底；遥测新增 `Aim goal (shared)` | `TeleOpMainBase.java` |
+| P0 | 车头按固定 Up/Down 门转向、炮台按 HIVE 动态门瞄准，两者可指向相反球门 | 车头改为 **GP1.LT/RT 直接选门**（颜色映射与 GP2 一致），只影响车头、不写回共享球门；`chassisAimGoal(boolean)` 直接返回 `aimGoal(leftTrigger)`（曾短暂改为优先取 `RobotPosition.getGoalPose()`，现按操作需求回退） | `TeleOpMainBase.java` |
 | P1 | `RobotPosition` 的 `MIDDLE` 取"上次抬升侧的相反侧"，与另两个分支的"抬升侧=同侧"约定相反，一帧 MIDDLE 就翻转球门 | `MIDDLE` 改为保持上次选择（滞回），从未观测到抬升侧时默认 AudienceUp | `RobotPosition.java` |
 | P1 | 两发射器方位接近 180° 时劣角平分线退化（`atan2(0,0)=0`），却仍判可行并自动发射 | 新增 `maxShooterYawSpread`（默认 90°）：超限直接判 `autoYawFeasible = false`，目标保持不变，走平转超限的安全通路；遥测新增 `AutoYaw spread (deg)` | `Turret.java` |
+
+### 2026-11 球门选择变更（手动设置 + 车头独立选门）
+
+| 类型 | 变更 | 实现 | 涉及文件 |
+| --- | --- | --- | --- |
+| 功能 | 手动阶段允许操作手用 GP2.LT/RT 指定炮台球门 | `RobotPosition.setManualGoalDown(boolean)` 写入 `goalDown` / `lastLiftedSide` / `cachedGoalPose`；`update()` 改为只在**本帧** MT1 非 MIDDLE 观测时覆盖，`MIDDLE` / 无读数保持上一帧（含手动输入）。TeleOp 在 `update()` 前处理扳机：红方 LT=Down / RT=Up，蓝方相反 | `RobotPosition.java`、`TeleOpMainBase.java` |
+| 变更 | GP1.LT/RT 改为直接选择车头球门 | `chassisAimGoal()` 直接返回 `aimGoal(leftTrigger)`，不调用 `setManualGoalDown`、不写回共享球门；只影响按住扳机期间的车头朝向。颜色映射与 GP2 一致；遥测 `Aim goal (shared)` / `Aim goal side` 仍表示炮台共享球门 | `TeleOpMainBase.java`、`TeleOpRed.java`、`TeleOpBlue.java` |
 
 > 未处理（本次范围外）：`AutoAimAction` 的首帧微分冲击与"成功/超时都返回 false"（自动阶段）；§12 表中 P2 类问题（超量程外推仍可自动发射、`isXxxFiring()` 切换残留等）。
