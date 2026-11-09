@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
@@ -114,7 +115,17 @@ public class TeleOpBlue extends LinearOpMode {
             // 因此这里必须在循环内调用，否则队列非空时底盘会一直被屏蔽。
             actionRunner.update();
 
+            // ---- 球道计数：每帧透传（光电门上升沿 ±1） ----
+            // 反向吐球（右保险杠）期间按出球模式计数 -1，其余时间按吸球模式 +1
+            int ballMode = gamepad1.right_bumper ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE;
+            RobotPosition.getInstance().updateBallCount(ballMode);
+
             sweeper.update();
+
+            // 手动清空放在满球停吸判定之后，保持「计数 → 停吸 → 手动清空」的帧内顺序
+            if (gamepad1.bWasPressed()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());

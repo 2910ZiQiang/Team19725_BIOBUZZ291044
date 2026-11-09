@@ -16,6 +16,7 @@ import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
@@ -105,6 +106,9 @@ public class AutoBlue extends LinearOpMode {
         while (opModeIsActive() && currentState != AutoState.STOP) {
             // 更新位姿（每帧唯一一次推进定位器）
             RobotPosition.getInstance().update();
+
+            // 球道计数每帧更新（自动阶段全程吸球，固定按进入模式 +1），供 Sweeper 满球停吸判定
+            RobotPosition.getInstance().updateBallCount(BallCounter.MODE_INTAKE);
 
             // 剩余时间（毫秒）
             long remainingMs = HypParams.AUTONOMOUS_DURATION_MS - (long) matchTime.milliseconds();
