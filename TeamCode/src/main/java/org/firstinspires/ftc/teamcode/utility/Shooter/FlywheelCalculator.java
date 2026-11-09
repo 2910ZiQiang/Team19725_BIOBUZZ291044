@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.utility.Shooter;
 
+import static org.firstinspires.ftc.teamcode.utility.Time.seconds;
+
 /**
  * 飞轮（发射机构）速度环计算器 —— <b>纯计算类</b>，不持有任何硬件引用。
  *
@@ -192,15 +194,11 @@ public class FlywheelCalculator {
     public static final double DEFAULT_DT = 0.02;
 
     public FlywheelCalculator() {
-        lastTime = now();
+        lastTime = seconds();
     }
 
     /** 上一次 calculate 的时间戳 (s)，仅 2 参数/3 参数入口使用 */
     private double lastTime;
-
-    private static double now() {
-        return System.nanoTime() / 1e9;
-    }
 
     // ==================== 计算 ====================
 
@@ -215,7 +213,7 @@ public class FlywheelCalculator {
      * @return 占空比，已限幅到 [dutyMin, dutyMax]
      */
     public double calculate(double targetVel, double currentVel, double vBus) {
-        double currentTime = now();
+        double currentTime = seconds();
         double dt = currentTime - lastTime;
         lastTime = currentTime;
         return calculate(targetVel, currentVel, vBus, dt);
@@ -476,7 +474,7 @@ public class FlywheelCalculator {
         iFrozenT = 0.0;
         settleCnt = 0;
         lastTargetVel = Double.NaN;
-        lastTime = now();
+        lastTime = seconds();
     }
 
     // ==================== 读取 ====================

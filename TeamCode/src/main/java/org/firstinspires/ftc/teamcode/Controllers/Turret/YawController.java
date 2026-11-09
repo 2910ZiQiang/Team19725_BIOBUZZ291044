@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.Controllers.Turret;
 
+import static org.firstinspires.ftc.teamcode.utility.Time.seconds;
+
 import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -96,6 +98,28 @@ public class YawController {
      */
     public static double yawSeamHysteresis = 0.1;
 
+    /**
+     * 目标死区（编码器 tick）：新目标与此前<b>已下发</b>的目标之差小于该值时，不重下 setpoint。
+     *
+     * <p><b>为什么必须有</b>：自动瞄准下 yaw 目标由位姿逐帧重算（两个发射器方位角的劣角平分线），
+     * 定位噪声会让 setpoint 每帧抖动 1~5 tick。而 {@link PIDSVAController} 在位置环里把 SVA
+     * 前馈的参考速度取成 {@code (setpoint − previousSetpoint)/dt}（见 {@code PIDSVAController:128}），
+     * 于是这个抖动被放大：{@code kV·Δ/dt} 直接进入占空比，且 {@code kS·signum(refVelocity)}
+     * 会在零点两侧整段翻 ±kS。按 kS=0.05、kV=2e-4、dt≈8.7 ms、tickPerRad=1000 计：
+     * 1 tick/帧 ≈ 0.07、5 tick/帧 ≈ 0.16 的逐帧正负交替占空比 —— 表现为炮台静止瞄准时持续嗡嗡抖、
+     * {@code onTarget} 反复进出容差（转速侧早有同构的 {@code Shooter.Params#speedDeadband}，
+     * 平转侧此前漏了）。
+     *
+     * <p><b>作用机理</b>：死区把"没在动的目标"变成严格常量 → {@code refVelocity ≡ 0} →
+     * {@code signum(0)=0}、SVA 三项同时归零，抖动从源头消失；目标真正变化（瞄准跟着车走、
+     * 摇杆微调）时仍照常下发，只是在 2 tick 的格点上量化。
+     *
+     * <p><b>取值</b>：必须远小于 {@link #onTargetTolerance}（0.02 rad）。2 tick 在
+     * tickPerRad=1000 时只有 0.002 rad（0.11°），约为到位容差的 1/10，不会影响命中判定。
+     * 设 0 可关闭死区（行为退回旧版）。
+     */
+    public static double targetDeadbandTicks = 2.0;
+
     // ==================== 运行时状态 ====================
 
     public final DcMotorEx motor;
@@ -119,6 +143,11 @@ public class YawController {
     private double cachedTicks = 0;
     /** 最近一次 update() 采到的目标编码器读数 (tick)，供遥测复用 */
     private double cachedTargetTicks = 0;
+    /**
+     * 已下发（latch）的目标 tick：只在目标变化超过 {@link #targetDeadbandTicks} 时更新。
+     * NaN = 尚未建立，本帧直接采用请求值。
+     */
+    private double heldTargetTicks = Double.NaN;
     /** 上一次 update() 采到的编码器读数 (tick)，用于差分出平转角速度；NaN = 尚无历史 */
     private double lastTicks = Double.NaN;
     /** 最近一次 update() 采到的平转角速度 (rad/s)，供遥测复用 */
@@ -146,11 +175,7 @@ public class YawController {
                 .withKS(kS).withKV(kV).withKA(kA)
                 .withOutputLimits(outputMin, outputMax));
 
-        lastTime = now();
-    }
-
-    private static double now() {
-        return System.nanoTime() / 1e9;
+        lastTime = seconds();
     }
 
     /**
@@ -160,13 +185,14 @@ public class YawController {
      * 且最短角差不超过 {@link #yawSeamHysteresis} 时，会保持上一帧目标，避免在正后方附近
      * 逐帧整圈反转（见方法内注释）。
      *
-     * @param yaw 目标平转角（弧度，0 表示朝车头），超出 ±{@link #yawRange} 会被钳制
+     * @param yaw 目标平转角（弧度，0 表示朝车头），超出 ±{@link #yawRange} 会被钳制；
+     *            与此前已下发目标的差小于 {@link #targetDeadbandTicks} 时不重下 setpoint
      * @return 平转机构是否已到达目标角度：位置误差小于 {@link #onTargetTolerance}、
      *         折返抑制残差不超过 {@link #onTargetTolerance}、且角速度小于
      *         {@link #onTargetRateTolerance}，并连续保持 {@link #onTargetFrames} 帧
      */
     public boolean update(double yaw) {
-        double currentTime = now();
+        double currentTime = seconds();
         double dt = currentTime - lastTime;
         lastTime = currentTime;
         // 首帧或长时间停顿后 dt 异常，用标称循环周期兜底，避免微分项发散
@@ -174,52 +200,28 @@ public class YawController {
             dt = 0.02;
         }
 
-        // 非有限目标（如定位/解算异常）直接停转，避免 NaN 传入 PID 与电机
+        // 非有限目标（如定位/解算异常）直接停转，避免 NaN 传入 PID 与电机。
+        // 复位动作与 stop() 完全相同，直接复用以免两处状态清理漏字段。
         if (!Double.isFinite(yaw)) {
-            motor.setPower(0);
-            power = 0;
-            onTarget = false;
-            onTargetCount = 0;
-            lastTicks = Double.NaN;
-            cachedYawRate = 0;
-            cachedSeamError = 0;
-            controller.reset();
+            stop();
             return false;
         }
 
-        // 钳制到机械可达范围
-        double requestedYaw = Math.max(-yawRange, Math.min(yawRange, yaw));
-
-        // 折返（±2π）抑制：±yawRange 两端在物理上可能是"同一朝向的两种表示"。
-        // 例如目标从 +π−ε 抖到 −π+ε 时，两个表示相差 2π，直接下发会让炮台按整圈行程
-        // 反转（满功率扫过全程、并在两端之间反复来回，永远到不了位）。
-        // 判据：与原目标的角度差超过 π（说明落在另一侧端点），但折算成最短角差后
-        // 不超过折返抑制窗口 yawSeamHysteresis（说明物理朝向几乎没变）→ 视为同一朝向，保持上一帧目标。
-        // 注意这里不能用位容差 onTargetTolerance：它只有 0.02 rad，正后方附近 1° 以上的
-        // 定位噪声就足以让判据失效并触发整圈扫动。
-        // 只抑制小角差抖动；真实的超窗口目标变更照常下发（此时绕行是其唯一可达路径）。
-        // 抑制时记录"保持目标"与真实期望方向的物理角差（≤ yawSeamHysteresis），
-        // 供到位判据使用：否则炮台会带着最多 0.1 rad 的偏角被判到位并自动扣扳机。
-        double seamError = 0.0;
-        double deltaYaw = requestedYaw - targetYaw;
-        if (Math.abs(deltaYaw) > Math.PI
-                && Math.abs(Vector2D.normalizeAngle(deltaYaw)) <= yawSeamHysteresis) {
-            seamError = Math.abs(Vector2D.normalizeAngle(deltaYaw));
-            requestedYaw = targetYaw;
+        // 目标死区：请求值相对"已下发值"变化不足 targetDeadbandTicks 时不重下 setpoint。
+        // 自动瞄准的 yaw 目标每帧由位姿重算，噪声抖动经 PIDSVA 的 setpoint 差分前馈会被放大
+        // （见 targetDeadbandTicks 注释）；死区把静止目标变成严格常量，refVelocity ≡ 0。
+        double requestedTicks = yawZeroTicks + applySeamSuppression(yaw) * tickPerRad;
+        if (Double.isNaN(heldTargetTicks)
+                || Math.abs(requestedTicks - heldTargetTicks) >= targetDeadbandTicks) {
+            heldTargetTicks = requestedTicks;
         }
-        cachedSeamError = seamError;
-        targetYaw = requestedYaw;
-
-        double targetTicks = yawZeroTicks + targetYaw * tickPerRad;
+        double targetTicks = heldTargetTicks;
         // 本帧唯一的硬件采样点：编码器只读一次，getter 与遥测复用缓存
         double currentTicks = motor.getCurrentPosition();
         cachedTicks = currentTicks;
         cachedTargetTicks = targetTicks;
 
-        // 平转角速度：由编码器差分得到（符号随 tickPerRad 自动正确）
-        double tickRate = Double.isNaN(lastTicks) ? 0.0 : (currentTicks - lastTicks) / dt;
-        lastTicks = currentTicks;
-        cachedYawRate = (Math.abs(tickPerRad) > 1e-9) ? tickRate / tickPerRad : 0.0;
+        estimateRate(currentTicks, dt);
 
         // 每帧刷新参数，使 Dashboard 上的改动即时生效
         slot.withKP(kP).withKI(kI).withKD(kD)
@@ -232,9 +234,56 @@ public class YawController {
         power = controller.calculate(targetTicks, currentTicks, dt, false);
         motor.setPower(power);
 
-        // 到位判据：位置误差在容差内且角速度足够小，并连续保持 onTargetFrames 帧
-        // （仅判单帧位置误差时，炮台高速扫过目标会在容差带内瞬时判为到位，导致带偏发射）
-        // 折返抑制残差也是"指向误差"：偏差超过容差时不算到位，禁止自动发射
+        return evaluateOnTarget(targetTicks, currentTicks, dt);
+    }
+
+    /**
+     * 钳制目标并做折返（±2π）抑制，结果写入 {@link #targetYaw} 与 {@link #cachedSeamError}。
+     *
+     * <p>±yawRange 两端在物理上可能是"同一朝向的两种表示"。例如目标从 +π−ε 抖到 −π+ε 时，
+     * 两个表示相差 2π，直接下发会让炮台按整圈行程反转（满功率扫过全程、并在两端之间反复
+     * 来回，永远到不了位）。判据：与原目标的角度差超过 π（说明落在另一侧端点），但折算成
+     * 最短角差后不超过折返抑制窗口 yawSeamHysteresis（说明物理朝向几乎没变）→ 视为同一朝向，
+     * 保持上一帧目标。
+     *
+     * <p>注意这里不能用到位容差 onTargetTolerance：它只有 0.02 rad，正后方附近 1° 以上的
+     * 定位噪声就足以让判据失效并触发整圈扫动。只抑制小角差抖动；真实的超窗口目标变更照常下发
+     * （此时绕行是其唯一可达路径）。抑制时记录"保持目标"与真实期望方向的物理角差
+     * （≤ yawSeamHysteresis），供到位判据使用：否则炮台会带着最多 0.1 rad 的偏角被判到位
+     * 并自动扣扳机。
+     *
+     * @return 本帧实际使用的（已钳制、已抑制）目标平转角
+     */
+    private double applySeamSuppression(double yaw) {
+        double requestedYaw = Math.max(-yawRange, Math.min(yawRange, yaw));
+
+        double seamError = 0.0;
+        double deltaYaw = requestedYaw - targetYaw;
+        if (Math.abs(deltaYaw) > Math.PI
+                && Math.abs(Vector2D.normalizeAngle(deltaYaw)) <= yawSeamHysteresis) {
+            seamError = Math.abs(Vector2D.normalizeAngle(deltaYaw));
+            requestedYaw = targetYaw;
+        }
+        cachedSeamError = seamError;
+        targetYaw = requestedYaw;
+        return targetYaw;
+    }
+
+    /** 由编码器差分估算角速度，写入 {@link #cachedYawRate}（符号随 tickPerRad 自动正确） */
+    private void estimateRate(double currentTicks, double dt) {
+        double tickRate = Double.isNaN(lastTicks) ? 0.0 : (currentTicks - lastTicks) / dt;
+        lastTicks = currentTicks;
+        cachedYawRate = (Math.abs(tickPerRad) > 1e-9) ? tickRate / tickPerRad : 0.0;
+    }
+
+    /**
+     * 到位判据：位置误差在容差内且角速度足够小，并连续保持 onTargetFrames 帧
+     * （仅判单帧位置误差时，炮台高速扫过目标会在容差带内瞬时判为到位，导致带偏发射）。
+     * 折返抑制残差也是"指向误差"：偏差超过容差时不算到位，禁止自动发射。
+     *
+     * @return 本帧是否判定到位
+     */
+    private boolean evaluateOnTarget(double targetTicks, double currentTicks, double dt) {
         boolean positionOk =
                 Math.abs(targetTicks - currentTicks) < onTargetTolerance * Math.abs(tickPerRad)
                 && cachedSeamError <= onTargetTolerance;
@@ -263,6 +312,9 @@ public class YawController {
         lastTicks = Double.NaN;
         cachedYawRate = 0;
         cachedSeamError = 0;
+        // 死区用的已下发目标一并作废：下次 update() 重新用当帧请求值建立基准，
+        // 否则 stop→重启后目标若与旧值相差不足死区，会被一直卡在旧目标上
+        heldTargetTicks = Double.NaN;
         controller.reset();
     }
 
@@ -271,6 +323,21 @@ public class YawController {
     /** @return 最近一次 update() 采到的平转角（弧度，已扣除零位） */
     public double getCurrentYaw() {
         return (cachedTicks - yawZeroTicks) / tickPerRad;
+    }
+
+    /**
+     * 实时读取平转角（弧度，已扣除零位）：直接读编码器，不依赖本帧 {@code update()}。
+     *
+     * <p>用于手动模式首帧初始化。注意不要把它合并到 {@link #getCurrentYaw()}：后者读
+     * 上一帧缓存，首次 {@code update()} 之前为 0，会把目标初始化成 0 导致炮台猛转。
+     *
+     * @return 实测平转角；{@code tickPerRad} 未标定（≈0）时返回 0
+     */
+    public double getMeasuredYaw() {
+        if (Math.abs(tickPerRad) < 1e-9) {
+            return 0.0;
+        }
+        return (motor.getCurrentPosition() - yawZeroTicks) / tickPerRad;
     }
 
     /** @return 最近一次下发的目标平转角（弧度，钳制后） */

@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.Controllers.Turret;
 
+import static org.firstinspires.ftc.teamcode.utility.Time.seconds;
+
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.roadrunner.Pose2d;
 import com.qualcomm.robotcore.hardware.HardwareMap;
@@ -7,6 +9,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.utility.AimGeometry;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -99,8 +102,12 @@ public class Turret {
 
     // ==================== 自动瞄准运行时状态（供遥测） ====================
 
-    /** 最近一次是否由自动瞄准 update 驱动（手动 update 会置 false） */
-    private boolean autoAimActive = false;
+    /** 炮台当前由哪条路径驱动（决定遥测分段，且互斥） */
+    private AimSource aimSource = AimSource.NONE;
+
+    /** 瞄准来源：同一时刻只有一条路径在驱动炮台 */
+    private enum AimSource { NONE, AUTO, MANUAL }
+
     /** 最近一次解算的平转目标（劣角平分线，已折叠到 (-π, π]，弧度，未钳制） */
     private double autoYawTarget = 0;
     /** 最近一次解算的平转目标是否在 ±{@link YawController#yawRange} 内 */
@@ -114,13 +121,9 @@ public class Turret {
     /** 最近一次两个发射器的解算结果；RobotPosition 不可用时为 null */
     private Shooter.ShotSolution autoBigSolution;
     private Shooter.ShotSolution autoSmallSolution;
-    /** 最近一帧实际释放的扳机 */
-    private boolean autoBigFired = false;
-    private boolean autoSmallFired = false;
-    /** 大球扳机本段释放的最短保持截止时刻 (秒，{@code now()} 口径)；0 表示不在保持窗口 */
-    private double bigFireHoldUntil = 0;
-    /** 小球扳机本段释放的最短保持截止时刻 (秒，{@code now()} 口径)；0 表示不在保持窗口 */
-    private double smallFireHoldUntil = 0;
+    /** 最近一帧实际释放的扳机（大球/小球各一个状态机，遥测字段名不变） */
+    private final TriggerGate bigGate = new TriggerGate();
+    private final TriggerGate smallGate = new TriggerGate();
 
     // ==================== 手动平转模式（供遥测） ====================
 
@@ -144,8 +147,6 @@ public class Turret {
     private double lastManualTime = 0;
     /** 最近一次 updateManual 算出的车体相对目标（已钳制到 ±yawRange，供遥测） */
     private double manualYawTarget = 0;
-    /** 最近一次是否由 updateManual 驱动 */
-    private boolean manualActive = false;
     /** 最近一次可解的球门方位（车体相对，弧度）：GOAL 模式方位退化时保持此值；NaN = 尚无有效值 */
     private double lastGoalBodyYaw = Double.NaN;
 
@@ -192,8 +193,7 @@ public class Turret {
     public FireReady update(double yaw, double pitchBig, double pitchSmall,
                             int speedBig, int speedSmall,
                             boolean triggerBig, boolean triggerSmall) {
-        autoAimActive = false;
-        manualActive = false;
+        aimSource = AimSource.NONE;
         clearAutoFireState();
 
         boolean yawReady = yawController.update(yaw);
@@ -214,8 +214,9 @@ public class Turret {
      *   <li>{@code allowFire} → 采用解算速度与仰角，机构与平转均到位即释放扳机，
  *       并至少连续释放 {@link #fireHoldTime} 秒（吸收就绪状态的逐帧抖动）；</li>
      *   <li>否则 → 预载：预载关闭时速度 0、仰角取最高档；位于不可发射区（
-     *       {@link HypParams#NoShootArea}）时速度 0、仰角取最低档；解算速度不超过
-     *       {@link Shooter.Params#preSpeedMax} 时直接采用；超过时用 preSpeedMax + 最高档。</li>
+     *       {@link HypParams#NoShootArea}）时速度 0、仰角取最低档；其余情况<b>一律采用解算档位</b>，
+     *       只把转速限制到 {@link Shooter.Params#preSpeedMax}。预载与发射必须共用同一个俯仰姿态，
+     *       否则每次扣扳机都要重等 {@link Shooter.Params#pitchSettleTime}，且舵机在按下/松开间来回摆动。</li>
      * </ul>
      *
      * @param allowFire        是否允许发射（否则按预载规则驱动机构）
@@ -223,13 +224,12 @@ public class Turret {
      * @param forceReleaseBig  是否强制释放大球扳机（无视就绪与平转超限）
      * @param forceReleaseSmall 是否强制释放小球扳机（无视就绪与平转超限）
      * @return 两发射器当前是否具备发射条件（平转到位 + 机构就绪），与 {@code allowFire}
-     *         及强制释放无关；本帧是否实际扣扳机见遥测 {@code autoBigFired/autoSmallFired}
+     *         及强制释放无关；本帧是否实际扣扳机见遥测 Auto big/small fired
      */
     public FireReady update(boolean allowFire, boolean preload,
                             boolean forceReleaseBig, boolean forceReleaseSmall) {
-        autoAimActive = true;
+        aimSource = AimSource.AUTO;
         autoPreloadEnabled = preload;
-        manualActive = false;
         // 自动模式接管后手动状态作废：下次进入手动时用实测角重新初始化，
         // 避免沿用上一次手动会话的 manualAngle 造成目标一帧内大角度突跳
         manualInitialized = false;
@@ -245,10 +245,8 @@ public class Turret {
             autoYawFeasible = false;
             autoYawSpread = 0;
             autoInNoShootArea = false;
-            autoBigFired = false;
-            autoSmallFired = false;
-            bigFireHoldUntil = 0;
-            smallFireHoldUntil = 0;
+            bigGate.clear();
+            smallGate.clear();
 
             yawController.update(autoYawTarget);
             shooterBig.update(0, shooterBig.getMaxPitch(), false);
@@ -262,18 +260,9 @@ public class Turret {
         autoSmallSolution = smallSol;
 
         // ---- 平转角：两方向的劣角平分线 ----
-        // 平转机械限位为 ±yawRange（默认 ±π，硬限位，只能转一圈），目标必须落在该区间内。
-        // 硬限位下 [-π, π] 是完整可达行程，任一指向的唯一可达表示就是折叠到 (-π, π] 的值；
-        // 因此不再叠加 2π 分支：分支值超出机械行程，钳制后反而指向错误方向。
-        // 注：正后方附近 ±π 两种表示逐帧翻转引起的整圈反转，由 YawController.yawSeamHysteresis
-        // （默认 0.1 rad ≈5.7°）吸收；只有当两表示折算后的最短角差不超过该窗口时才保持旧目标。
-        // 保持期间的实际偏差计入 YawController 的到位判据（> onTargetTolerance 不算到位、禁止自动发射），
-        // 因此不会出现"炮台偏着却判到位"的带偏发射。
-        // 超出窗口的目标变更仍按硬限位下的唯一路径绕行整圈——这是机械结构决定的，不是 bug。
-        //
-        // 但单位向量求和有一个退化点：两方位相差接近 180° 时和向量趋近于零，atan2(0,0) 返回 0，
-        // 平分线失去意义。这时炮口会被推到车头方向、却照常判到位并自动扣扳机。
-        // 因此先用夹角做一次有效性判定：夹角超过 maxShooterYawSpread 直接判不可行
+        // 硬限位 ±yawRange 内任一指向的唯一可达表示 = 折叠到 (-π, π]；不叠加 2π 分支（该分支越界）。
+        // 正后方 ±π 两表示的整圈反转由 YawController.yawSeamHysteresis 抑制，抑制残差计入到位判据。
+        // 退化点：两方位接近相反时和向量趋零、atan2(0,0)=0；夹角超过 maxShooterYawSpread 判不可行
         // （走与平转超限相同的安全通路：保持转速与仰角、禁止自动发射），且不更新目标以免突跳。
         autoYawSpread = Math.abs(Vector2D.normalizeAngle(bigSol.yaw - smallSol.yaw));
         autoYawTarget = bisectorYaw(bigSol.yaw, smallSol.yaw);
@@ -288,94 +277,31 @@ public class Turret {
         autoInNoShootArea = HypParams.NoShootArea != null
                 && HypParams.NoShootArea.Contains(pose.position.x, pose.position.y);
 
-        // ---- 各发射器独立决定本帧目标 ----
-        int speedBig;
-        double pitchBig;
-        if (forceReleaseBig) {
-            speedBig = bigSol.speed;
-            pitchBig = bigSol.pitch;
-        } else if (!autoYawFeasible) {
-            speedBig = shooterBig.getTargetSpeed();
-            pitchBig = shooterBig.getTargetPitch();
-        } else if (allowFire) {
-            speedBig = bigSol.speed;
-            pitchBig = bigSol.pitch;
-        } else {
-            Preload preloadBig = preloadFor(shooterBig, bigSol, preload);
-            speedBig = preloadBig.speed;
-            pitchBig = preloadBig.pitch;
-        }
+        // ---- 各发射器独立决定本帧目标（分支顺序：强制释放 > 平转不可行 > 发射 > 预载）----
+        Target bigTarget = resolveTarget(shooterBig, bigSol, forceReleaseBig, allowFire, preload);
+        Target smallTarget = resolveTarget(shooterSmall, smallSol, forceReleaseSmall, allowFire, preload);
 
-        int speedSmall;
-        double pitchSmall;
-        if (forceReleaseSmall) {
-            speedSmall = smallSol.speed;
-            pitchSmall = smallSol.pitch;
-        } else if (!autoYawFeasible) {
-            speedSmall = shooterSmall.getTargetSpeed();
-            pitchSmall = shooterSmall.getTargetPitch();
-        } else if (allowFire) {
-            speedSmall = smallSol.speed;
-            pitchSmall = smallSol.pitch;
-        } else {
-            Preload preloadSmall = preloadFor(shooterSmall, smallSol, preload);
-            speedSmall = preloadSmall.speed;
-            pitchSmall = preloadSmall.pitch;
-        }
-
-        // 先以扳机关闭下发，拿到本帧的机构就绪结果，再决定是否扣扳机
-        boolean bigReady = shooterBig.update(speedBig, pitchBig, false);
-        boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, false);
+        // 先只下发机构目标，拿到本帧就绪结果；扳机在本帧末尾按"最终值"统一写一次
+        boolean bigReady = shooterBig.updateMechanisms(bigTarget.speed, bigTarget.pitch);
+        boolean smallReady = shooterSmall.updateMechanisms(smallTarget.speed, smallTarget.pitch);
 
         boolean bigCanFire = autoYawFeasible && yawReady && bigReady;
         boolean smallCanFire = autoYawFeasible && yawReady && smallReady;
 
-        // ---- 扳机释放 + 最短保持（吸收就绪状态逐帧抖动）----
-        // 飞轮稳态计数会因目标转速的每一点变化而清零，自动瞄准下转速随射程逐帧重算，
-        // 到位状态可能在边界附近逐帧真假交替。若每帧重新决定扳机，舵机会逐帧开合、打断装填。
-        // 因此一旦开始释放，就至少保持 fireHoldTime；只有条件连续失效超过该时长才关闭。
-        // 例外：取消允许发射、平转超限（指向已不可达）、强制释放松手都立即关闭，不进入保持窗口。
-        //
-        // 关键：保持窗口只吸收"转速/俯仰就绪"的抖动，不吸收"指向失效"。
-        // 若窗口内不比 yawHoldOk，球门切换（HIVE 翻转 → 目标跳变近 180°）或底盘持续转动时，
-        // 只要出现一帧就绪，扳机就会被连续打开整个 fireHoldTime（120°/s 下约 18° 偏角）。
+        // ---- 扳机释放 + 最短保持（语义见 TriggerGate：强制释放 > 取消允许/不可行 > 到位 > 保持窗口）----
+        // 窗口只吸收"转速/俯仰就绪"的抖动，续开仍要求指向有效（yawHoldOk），不吸收指向失效。
         boolean yawHoldOk = autoYawFeasible && yawReady;
-        double nowSec = now();
-        if (forceReleaseBig) {
-            autoBigFired = true;
-            bigFireHoldUntil = 0;
-        } else if (!allowFire || !autoYawFeasible) {
-            autoBigFired = false;
-            bigFireHoldUntil = 0;
-        } else if (bigCanFire) {
-            autoBigFired = true;
-            bigFireHoldUntil = nowSec + fireHoldTime;
-        } else {
-            autoBigFired = yawHoldOk && nowSec < bigFireHoldUntil;
-        }
+        double nowSec = seconds();
+        bigGate.update(forceReleaseBig, allowFire, autoYawFeasible, bigCanFire,
+                yawHoldOk, nowSec, fireHoldTime);
+        smallGate.update(forceReleaseSmall, allowFire, autoYawFeasible, smallCanFire,
+                yawHoldOk, nowSec, fireHoldTime);
 
-        if (forceReleaseSmall) {
-            autoSmallFired = true;
-            smallFireHoldUntil = 0;
-        } else if (!allowFire || !autoYawFeasible) {
-            autoSmallFired = false;
-            smallFireHoldUntil = 0;
-        } else if (smallCanFire) {
-            autoSmallFired = true;
-            smallFireHoldUntil = nowSec + fireHoldTime;
-        } else {
-            autoSmallFired = yawHoldOk && nowSec < smallFireHoldUntil;
-        }
-
-        if (autoBigFired) {
-            shooterBig.setTrigger(true);
-        }
-        if (autoSmallFired) {
-            shooterSmall.setTrigger(true);
-        }
+        shooterBig.setTrigger(bigGate.isFired());
+        shooterSmall.setTrigger(smallGate.isFired());
 
         // 返回值统一为"是否具备发射条件"，与 allowFire / 强制释放无关；
-        // 本帧是否实际扣扳机见 autoBigFired / autoSmallFired（遥测）
+        // 本帧是否实际扣扳机见遥测 Auto big fired / Auto small fired
         return new FireReady(bigCanFire, smallCanFire);
     }
 
@@ -396,7 +322,7 @@ public class Turret {
      *         （含 {@link #fireHoldTime} 的最短保持窗口与强制释放）
      */
     public boolean isBigFiring() {
-        return autoBigFired;
+        return bigGate.isFired();
     }
 
     /**
@@ -404,7 +330,7 @@ public class Turret {
      *         （含 {@link #fireHoldTime} 的最短保持窗口与强制释放）
      */
     public boolean isSmallFiring() {
-        return autoSmallFired;
+        return smallGate.isFired();
     }
 
     /**
@@ -455,11 +381,10 @@ public class Turret {
     public FireReady updateManual(double yawRate, double pitchBig, double pitchSmall,
                                   int speedBig, int speedSmall,
                                   boolean triggerBig, boolean triggerSmall) {
-        manualActive = true;
-        autoAimActive = false;
+        aimSource = AimSource.MANUAL;
         clearAutoFireState();
 
-        double now = now();
+        double now = seconds();
         double dt = (lastManualTime == 0) ? 0.02 : (now - lastManualTime);
         lastManualTime = now;
         if (dt <= 0 || dt > 0.1) {
@@ -490,32 +415,38 @@ public class Turret {
 
     /**
      * 清空自动发射状态。切到手动或完全开放环目标时调用：只清保持窗口不够，
-     * 还必须清 {@code autoBigFired/autoSmallFired}，否则 {@link #isBigFiring()} /
-     * {@link #isSmallFiring()} 会残留上一帧的 true（且此时遥测不再显示 Auto fired 行，属静默残留）。
+     * 还必须清 fired，否则 {@link #isBigFiring()} / {@link #isSmallFiring()}
+     * 会残留上一帧的 true（且此时遥测不再显示 Auto fired 行，属静默残留）。
      */
     private void clearAutoFireState() {
-        autoBigFired = false;
-        autoSmallFired = false;
-        bigFireHoldUntil = 0;
-        smallFireHoldUntil = 0;
+        bigGate.clear();
+        smallGate.clear();
+    }
+
+    /**
+     * 当前模式下把"被维持角度"与车体相对 yaw 互相换算的加性基准：
+     * 正变换 {@code out = wrap(manualAngle + offset)}，逆变换 {@code manualAngle = out − offset}。
+     *
+     * <p>返回 {@code null} 表示被维持量不是"相对 yaw 的平移"：RELATIVE 下被维持量本身就是
+     * 相对 yaw（需要饱和而非折返），ABS/GOAL 缺定位时语义未知（只能折算输出、不回写）。
+     * 正/逆变换共用这一个基准，避免两处手写公式少一个负号。
+     */
+    private Double manualOffset(Pose2d pose, Pose2d goal) {
+        switch (manualYawMode) {
+            case ABSOLUTE:
+                return (pose != null) ? -pose.heading.toDouble() : null;
+            case GOAL:
+                return (pose != null && goal != null) ? goalBodyYaw(pose, goal) : null;
+            default:
+                return null;
+        }
     }
 
     /** 以车体相对 yaw 为基准，按当前模式换算被维持的角度 */
-    private void rebaseManualAngle(double bodyYaw, Pose2d pose, Pose2d goal) {
-        double theta = (pose != null) ? pose.heading.toDouble() : 0.0;
-        switch (manualYawMode) {
-            case ABSOLUTE:
-                manualAngle = (pose != null) ? theta + bodyYaw : bodyYaw;
-                break;
-            case GOAL:
-                manualAngle = (pose != null && goal != null)
-                        ? bodyYaw - goalBodyYaw(pose, goal)
-                        : bodyYaw;
-                break;
-            default:
-                manualAngle = bodyYaw;
-                break;
-        }
+    // 包私有而非 private：供同包单元测试直接验证正/逆变换（无行为差异）
+    void rebaseManualAngle(double bodyYaw, Pose2d pose, Pose2d goal) {
+        Double offset = manualOffset(pose, goal);
+        manualAngle = (offset != null) ? bodyYaw - offset : bodyYaw;
     }
 
     /**
@@ -539,42 +470,25 @@ public class Turret {
      * @param goal 当前球门；GOAL 模式缺失时退化为 ±yawRange 钳制
      * @return 本帧下发的车体相对 yaw（已钳制到 ±yawRange）
      */
-    private double clampManualAngle(Pose2d pose, Pose2d goal) {
+    double clampManualAngle(Pose2d pose, Pose2d goal) {
         double range = YawController.yawRange;
-        switch (manualYawMode) {
-            case ABSOLUTE:
-                if (pose != null) {
-                    // 锁定场地绝对朝向：manualAngle 为场地角，减去车头航向即为车体相对 yaw
-                    double theta = pose.heading.toDouble();
-                    double out = clampToRange(manualAngle - theta, range);
-                    // 状态跟随本帧输出：out + theta 与原 manualAngle 只差 2π 整数倍，锁定语义不变
-                    if (Double.isFinite(out)) {
-                        manualAngle = out + theta;
-                    }
-                    return out;
-                }
-                break;
-            case GOAL:
-                if (pose != null && goal != null) {
-                    // manualAngle 为相对球门方位的偏差：偏差 0 即 (bearing − θ)
-                    double bearing = goalBodyYaw(pose, goal);
-                    double out = clampToRange(bearing + manualAngle, range);
-                    // 状态跟随本帧输出：out − bearing 与原偏差只差 2π 整数倍
-                    if (Double.isFinite(out)) {
-                        manualAngle = out - bearing;
-                    }
-                    return out;
-                }
-                break;
-            case RELATIVE:
-                // 被维持量即车体相对 yaw：撞硬限位必须饱和，不能折叠到另一侧端点
-                manualAngle = clampAngle(manualAngle, range);
-                return manualAngle;
-            default:
-                break;
+        if (manualYawMode == YawMode.RELATIVE) {
+            // 被维持量即车体相对 yaw：撞硬限位必须饱和，不能折叠到另一侧端点
+            manualAngle = clampAngle(manualAngle, range);
+            return manualAngle;
         }
-        // ABS/GOAL 缺定位：状态语义不是相对 yaw（可能停在其它 2π 分支），折算后钳制输出、不写回状态
-        return clampToRange(manualAngle, range);
+        Double offset = manualOffset(pose, goal);
+        if (offset == null) {
+            // ABS/GOAL 缺定位：状态语义不是相对 yaw（可能停在其它 2π 分支），折算后钳制输出、不写回状态
+            return clampToRange(manualAngle, range);
+        }
+        double out = clampToRange(manualAngle + offset, range);
+        // 状态跟随本帧输出：out − offset 与原 manualAngle 只差 2π 整数倍，锁定语义不变；
+        // 不回写则顶在限位继续推杆会把累积量越积越远，反向推杆先要"消化"，形成死区
+        if (Double.isFinite(out)) {
+            manualAngle = out - offset;
+        }
+        return out;
     }
 
     /** 饱和钳制到 ±range，不做 2π 折返（用于被维持量本身就是相对 yaw 的场景） */
@@ -592,11 +506,7 @@ public class Turret {
 
     /** @return 最近一次 update() 之前直接用编码器实测的平转角（供首帧初始化） */
     private double measuredYaw() {
-        double tickPerRad = YawController.tickPerRad;
-        if (Math.abs(tickPerRad) < 1e-9) {
-            return 0.0;
-        }
-        return (yawController.motor.getCurrentPosition() - YawController.yawZeroTicks) / tickPerRad;
+        return yawController.getMeasuredYaw();
     }
 
     private static Pose2d poseOrNull() {
@@ -636,9 +546,9 @@ public class Turret {
      * 摇杆回中后目标仍按该偏移量逐帧自增并撞向 ±yawRange 限位。锁存后 {@code bearing}
      * 为常量，公式退化为 {@code T = C + m}，只有摇杆能改变目标。
      */
-    private double goalBodyYaw(Pose2d pose, Pose2d goal) {
-        double yaw = bisectorYaw(bodyYawToGoal(pose, goal, RelPosBig),
-                bodyYawToGoal(pose, goal, RelPosSmall));
+    double goalBodyYaw(Pose2d pose, Pose2d goal) {
+        double yaw = bisectorYaw(AimGeometry.bodyYawToGoal(pose, goal, RelPosBig),
+                AimGeometry.bodyYawToGoal(pose, goal, RelPosSmall));
         if (!Double.isFinite(yaw)) {
             if (!Double.isFinite(lastGoalBodyYaw)) {
                 // 首帧即退化：把当前平转目标锁存为基准（此后不再读取，避免正反馈）
@@ -655,59 +565,60 @@ public class Turret {
      * （{@code atan2(0,0)=0} 会把平分线错当成车头方向），返回 NaN 表示不可解。
      * 自动瞄准与手动 GOAL 模式共用此判据，避免两条路径行为不一致。
      */
-    private static double bisectorYaw(double bigYaw, double smallYaw) {
-        if (Math.abs(Vector2D.normalizeAngle(bigYaw - smallYaw)) > maxShooterYawSpread) {
-            return Double.NaN;
-        }
-        return Math.atan2(Math.sin(bigYaw) + Math.sin(smallYaw),
-                Math.cos(bigYaw) + Math.cos(smallYaw));
+    static double bisectorYaw(double bigYaw, double smallYaw) {
+        return AimGeometry.bisectorYaw(bigYaw, smallYaw, maxShooterYawSpread);
     }
 
-    /** @return 单个发射器中心指向球门的车体相对方位角 */
-    private static double bodyYawToGoal(Pose2d pose, Pose2d goal, Vector2D rel) {
-        double theta = pose.heading.toDouble();
-        Vector2D rotated = Vector2D.rotate(rel != null ? rel : Vector2D.ZERO, theta);
-        double shooterX = pose.position.x + rotated.getX();
-        double shooterY = pose.position.y + rotated.getY();
-        return Vector2D.normalizeAngle(
-                Math.atan2(goal.position.y - shooterY, goal.position.x - shooterX) - theta);
-    }
-
-    private static double now() {
-        return System.nanoTime() / 1e9;
-    }
-
-    /** 预载目标：该发射器在非发射状态下应使用的速度与仰角 */
-    private static final class Preload {
+    /** 单帧目标：该发射器本帧应使用的飞轮速度与俯仰（发射、预载、保持共用同一类型） */
+    private static final class Target {
         final int speed;
         final double pitch;
 
-        Preload(int speed, double pitch) {
+        Target(int speed, double pitch) {
             this.speed = speed;
             this.pitch = pitch;
         }
     }
 
     /**
-     * 按自动瞄准规则计算预载目标。
+     * 按自动瞄准规则决定单个发射器本帧目标。
      *
-     * @param shooter        目标发射器
-     * @param sol            该发射器的解算结果
-     * @param preloadEnabled 预载是否开启
-     * @return 预载速度与仰角
+     * <p>分支顺序不可调整：强制释放 > 平转不可行（保持上一帧）> 允许发射（采用解算值）
+     * > 预载。平转不可行时取的是上一帧下发值（{@code getTargetSpeed/getTargetPitch}
+     * 均为上一次 {@code update} 的目标），因此本帧不会产生新的机构目标跳变。
      */
-    private Preload preloadFor(Shooter shooter, Shooter.ShotSolution sol, boolean preloadEnabled) {
+    private Target resolveTarget(Shooter shooter, Shooter.ShotSolution sol,
+                                 boolean forceRelease, boolean allowFire, boolean preloadEnabled) {
+        if (forceRelease) {
+            return new Target(sol.speed, sol.pitch);
+        }
+        if (!autoYawFeasible) {
+            return new Target(shooter.getTargetSpeed(), shooter.getTargetPitch());
+        }
+        if (allowFire) {
+            return new Target(sol.speed, sol.pitch);
+        }
+        return preloadFor(shooter, sol, preloadEnabled);
+    }
+
+    /**
+     * 预载目标：关闭 → 0 速 + 最高档；不可发射区 → 0 速 + 最低档；否则<b>限速</b> − 解算档位不变。
+     *
+     * <p>预载与发射的俯仰姿态必须一致：{@code sol.speed} 超过 {@code preSpeedMax} 时只钳制<b>转速</b>，
+     * 不能改仰角。旧实现此时返回 {@code getMaxPitch()}，使"按 A 的瞬间"俯仰目标跳变 →
+     * {@code pitchCommandTime} 重置 → 需再等 {@code pitchSettleTime}（0.25 s）才可能发射；
+     * 松开 A 又摆回最高档，下一次再等一遍，A 键抖动时反复触发。
+     * 最高/最低档只保留给"预载关闭 / 禁射区"两个安全姿态。
+     */
+    private Target preloadFor(Shooter shooter, Shooter.ShotSolution sol, boolean preloadEnabled) {
         if (!preloadEnabled) {
-            return new Preload(0, shooter.getMaxPitch());
+            return new Target(0, shooter.getMaxPitch());
         }
         if (autoInNoShootArea) {
-            return new Preload(0, shooter.getMinPitch());
+            return new Target(0, shooter.getMinPitch());
         }
         int preSpeedMax = shooter.getParams().preSpeedMax;
-        if (sol.speed <= preSpeedMax) {
-            return new Preload(sol.speed, sol.pitch);
-        }
-        return new Preload(preSpeedMax, shooter.getMaxPitch());
+        return new Target(Math.min(sol.speed, preSpeedMax), sol.pitch);
     }
 
     /** 停止炮台：平转停止输出，两个发射器停转并关闭扳机 */
@@ -716,19 +627,16 @@ public class Turret {
         shooterBig.stop();
         shooterSmall.stop();
 
-        autoAimActive = false;
+        aimSource = AimSource.NONE;
         autoYawFeasible = false;
         autoYawSpread = 0;
         autoBigSolution = null;
         autoSmallSolution = null;
-        autoBigFired = false;
-        autoSmallFired = false;
-        bigFireHoldUntil = 0;
-        smallFireHoldUntil = 0;
+        bigGate.clear();
+        smallGate.clear();
 
         // 手动状态一并复位：下次进入手动时重新用实测角初始化
         manualInitialized = false;
-        manualActive = false;
         manualAngle = 0;
         lastManualTime = 0;
     }
@@ -739,14 +647,14 @@ public class Turret {
         shooterBig.setTelemetry();
         shooterSmall.setTelemetry();
 
-        if (manualActive) {
+        if (aimSource == AimSource.MANUAL) {
             telemetry.addLine("-- turret manual aim --");
             telemetry.addData("Manual yaw mode", manualYawMode);
             telemetry.addData("Manual angle (deg)", "%.1f", Math.toDegrees(manualAngle));
             telemetry.addData("Manual yaw target (deg)", "%.1f", Math.toDegrees(manualYawTarget));
         }
 
-        if (autoAimActive) {
+        if (aimSource == AimSource.AUTO) {
             telemetry.addLine("-- turret auto aim --");
             telemetry.addData("AutoYaw target (deg)", "%.1f", Math.toDegrees(autoYawTarget));
             telemetry.addData("AutoYaw feasible", autoYawFeasible);
@@ -754,8 +662,8 @@ public class Turret {
             telemetry.addData("AutoYaw on target", yawController.isOnTarget());
             telemetry.addData("Auto preload", autoPreloadEnabled);
             telemetry.addData("Auto in no-shoot area", autoInNoShootArea);
-            telemetry.addData("Auto big fired", autoBigFired);
-            telemetry.addData("Auto small fired", autoSmallFired);
+            telemetry.addData("Auto big fired", bigGate.isFired());
+            telemetry.addData("Auto small fired", smallGate.isFired());
             if (autoBigSolution != null) {
                 telemetry.addData("Auto big range (in)", "%.1f", autoBigSolution.range);
                 telemetry.addData("Auto big pitch", "%.3f", autoBigSolution.pitch);
