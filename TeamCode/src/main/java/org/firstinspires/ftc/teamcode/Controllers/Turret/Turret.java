@@ -146,6 +146,8 @@ public class Turret {
     private double manualYawTarget = 0;
     /** 最近一次是否由 updateManual 驱动 */
     private boolean manualActive = false;
+    /** 最近一次可解的球门方位（车体相对，弧度）：GOAL 模式方位退化时保持此值；NaN = 尚无有效值 */
+    private double lastGoalBodyYaw = Double.NaN;
 
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
@@ -192,9 +194,7 @@ public class Turret {
                             boolean triggerBig, boolean triggerSmall) {
         autoAimActive = false;
         manualActive = false;
-        // 退出自动瞄准：作废自动释放的保持窗口，避免重新进入自动时沿用旧的截止时刻误开扳机
-        bigFireHoldUntil = 0;
-        smallFireHoldUntil = 0;
+        clearAutoFireState();
 
         boolean yawReady = yawController.update(yaw);
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
@@ -276,13 +276,11 @@ public class Turret {
         // 因此先用夹角做一次有效性判定：夹角超过 maxShooterYawSpread 直接判不可行
         // （走与平转超限相同的安全通路：保持转速与仰角、禁止自动发射），且不更新目标以免突跳。
         autoYawSpread = Math.abs(Vector2D.normalizeAngle(bigSol.yaw - smallSol.yaw));
-        if (autoYawSpread > maxShooterYawSpread) {
+        autoYawTarget = bisectorYaw(bigSol.yaw, smallSol.yaw);
+        if (!Double.isFinite(autoYawTarget)) {
             autoYawTarget = yawController.getTargetYaw();   // 退化：保持上一帧目标
             autoYawFeasible = false;
         } else {
-            autoYawTarget = Math.atan2(
-                    Math.sin(bigSol.yaw) + Math.sin(smallSol.yaw),
-                    Math.cos(bigSol.yaw) + Math.cos(smallSol.yaw));
             autoYawFeasible = Math.abs(autoYawTarget) <= YawController.yawRange;
         }
         boolean yawReady = yawController.update(autoYawTarget);
@@ -459,9 +457,7 @@ public class Turret {
                                   boolean triggerBig, boolean triggerSmall) {
         manualActive = true;
         autoAimActive = false;
-        // 退出自动瞄准：作废自动释放的保持窗口，避免切回自动时立即误开扳机
-        bigFireHoldUntil = 0;
-        smallFireHoldUntil = 0;
+        clearAutoFireState();
 
         double now = now();
         double dt = (lastManualTime == 0) ? 0.02 : (now - lastManualTime);
@@ -490,6 +486,18 @@ public class Turret {
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
 
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
+    }
+
+    /**
+     * 清空自动发射状态。切到手动或完全开放环目标时调用：只清保持窗口不够，
+     * 还必须清 {@code autoBigFired/autoSmallFired}，否则 {@link #isBigFiring()} /
+     * {@link #isSmallFiring()} 会残留上一帧的 true（且此时遥测不再显示 Auto fired 行，属静默残留）。
+     */
+    private void clearAutoFireState() {
+        autoBigFired = false;
+        autoSmallFired = false;
+        bigFireHoldUntil = 0;
+        smallFireHoldUntil = 0;
     }
 
     /** 以车体相对 yaw 为基准，按当前模式换算被维持的角度 */
@@ -614,13 +622,45 @@ public class Turret {
 
     /**
      * 两发射器指向球门的劣角平分线（车体相对，弧度）。
-     * 与自动瞄准同一公式，但独立实现、不调用 {@link Shooter#solve}，
-     * 避免改写其仰角档位滞回状态（{@code selectedModel}）。
+     * 与自动瞄准同一公式（共用 {@link #bisectorYaw}），但独立实现、不调用
+     * {@link Shooter#solve}，避免改写其仰角档位滞回状态（{@code selectedModel}）。
+     *
+     * <p>退化（两发射器方位接近相反）时保持上一帧有效方位；从未有有效值则把当前平转目标
+     * <b>锁存</b>为基准——与自动瞄准在 {@code maxShooterYawSpread} 超限时的处理一致，
+     * 避免把球门方位错当成车头方向（{@code atan2(0,0)=0}）。
+     *
+     * <p><b>必须锁存，不能每帧回读 {@code getTargetYaw()}</b>：它正是本函数的返回值经
+     * {@link #clampManualAngle} 钳制后的结果，每帧回读会形成
+     * {@code bearing ← 上一帧输出} 的正反馈。由于 GOAL 模式每帧把
+     * {@code manualAngle} 回写为 {@code out − bearing}，偏移量会被锁定不再吸收，
+     * 摇杆回中后目标仍按该偏移量逐帧自增并撞向 ±yawRange 限位。锁存后 {@code bearing}
+     * 为常量，公式退化为 {@code T = C + m}，只有摇杆能改变目标。
      */
     private double goalBodyYaw(Pose2d pose, Pose2d goal) {
-        double big = bodyYawToGoal(pose, goal, RelPosBig);
-        double small = bodyYawToGoal(pose, goal, RelPosSmall);
-        return Math.atan2(Math.sin(big) + Math.sin(small), Math.cos(big) + Math.cos(small));
+        double yaw = bisectorYaw(bodyYawToGoal(pose, goal, RelPosBig),
+                bodyYawToGoal(pose, goal, RelPosSmall));
+        if (!Double.isFinite(yaw)) {
+            if (!Double.isFinite(lastGoalBodyYaw)) {
+                // 首帧即退化：把当前平转目标锁存为基准（此后不再读取，避免正反馈）
+                lastGoalBodyYaw = yawController.getTargetYaw();
+            }
+            return lastGoalBodyYaw;
+        }
+        lastGoalBodyYaw = yaw;
+        return yaw;
+    }
+
+    /**
+     * 两个方位角的劣角平分线。夹角超过 {@link #maxShooterYawSpread} 时单位向量和退化
+     * （{@code atan2(0,0)=0} 会把平分线错当成车头方向），返回 NaN 表示不可解。
+     * 自动瞄准与手动 GOAL 模式共用此判据，避免两条路径行为不一致。
+     */
+    private static double bisectorYaw(double bigYaw, double smallYaw) {
+        if (Math.abs(Vector2D.normalizeAngle(bigYaw - smallYaw)) > maxShooterYawSpread) {
+            return Double.NaN;
+        }
+        return Math.atan2(Math.sin(bigYaw) + Math.sin(smallYaw),
+                Math.cos(bigYaw) + Math.cos(smallYaw));
     }
 
     /** @return 单个发射器中心指向球门的车体相对方位角 */

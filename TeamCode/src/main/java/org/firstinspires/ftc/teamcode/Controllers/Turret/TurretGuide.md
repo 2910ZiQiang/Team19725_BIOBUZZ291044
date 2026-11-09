@@ -298,9 +298,9 @@ manualAngle \mathrel{+}= \omega \cdot \Delta t
 | `ABSOLUTE` | 场地绝对朝向 | `out = clampToRange(manualAngle − θ)` | 输出钳制 + **回写状态** |
 | `GOAL` | 相对球门方位的偏差 | `out = clampToRange(bearing + manualAngle)` | 输出钳制 + **回写状态** |
 
-`bearing = goalBodyYaw(pose, goal)`，即两个发射器指向球门的**劣角平分线**（与自动瞄准同一公式，但 [独立实现](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/firstinspires/ftc/teamcode/Controllers/Turret/Turret.java#L568-L582)，不调用 `solve`，以免改写 `selectedModel` 档位滞回状态）。
+`bearing = goalBodyYaw(pose, goal)`，即两个发射器指向球门的**劣角平分线**（与自动瞄准同一公式，但 [独立实现](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/firstinspires/ftc/teamcode/Controllers/Turret/Turret.java#L639-L651)，不调用 `solve`，以免改写 `selectedModel` 档位滞回状态）。两者共用退化判据 `bisectorYaw`：两发射器方位夹角超过 `maxShooterYawSpread`（默认 90°）时和向量退化，此时**保持上一帧有效方位**；从未有效（进入 GOAL 首帧即退化）则把当前平转目标**锁存**为基准，此后不再回读 `getTargetYaw()`。不能每帧回读：它正是本函数返回值经 `clampManualAngle` 钳制后的结果，会形成 `bearing ← 上一帧输出` 正反馈——GOAL 模式每帧把 `manualAngle` 回写为 `out − bearing` 使偏移量被锁定不再吸收，摇杆回中后目标仍按该偏移量逐帧自增并撞向 ±`yawRange`。锁存后 `bearing` 为常量，退化为 `T = C + m`，只有摇杆能改变目标。这样不会把球门方位错当成车头方向（`atan2(0,0)=0`）。
 
-实现见 [clampManualAngle](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/firstinspires/ftc/teamcode/Controllers/Turret/Turret.java#L482-L518)：
+实现见 [clampManualAngle](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/firstinspires/ftc/teamcode/Controllers/Turret/Turret.java#L542-L580)：
 
 - **REL 必须饱和，不能折叠**。`manualAngle` 就是相对 yaw，撞限位后再推一步若"折到另一端"，炮台会反向整圈扫回，推杆方向也反转。所以用 `clampAngle`（纯饱和）。
 - **ABS/GOAL 先折算到 `(-π, π]` 再钳制，并把状态回写**为输出对应的等价表示（`manualAngle = out + θ` 或 `manualAngle = out − bearing`）。回写值与原值只差 2π 整数倍，锁定语义不变；不回写则顶在限位继续推杆会把状态越积越远，反向推杆先要"消化"这段累积量，表现为一段**无响应的死区**。
@@ -704,6 +704,8 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | P0 | 车头按固定 Up/Down 门转向、炮台按 HIVE 动态门瞄准，两者可指向相反球门 | 车头改为 **GP1.LT/RT 直接选门**（颜色映射与 GP2 一致），只影响车头、不写回共享球门；`chassisAimGoal(boolean)` 直接返回 `aimGoal(leftTrigger)`（曾短暂改为优先取 `RobotPosition.getGoalPose()`，现按操作需求回退） | `TeleOpMainBase.java` |
 | P1 | `RobotPosition` 的 `MIDDLE` 取"上次抬升侧的相反侧"，与另两个分支的"抬升侧=同侧"约定相反，一帧 MIDDLE 就翻转球门 | `MIDDLE` 改为保持上次选择（滞回），从未观测到抬升侧时默认 AudienceUp | `RobotPosition.java` |
 | P1 | 两发射器方位接近 180° 时劣角平分线退化（`atan2(0,0)=0`），却仍判可行并自动发射 | 新增 `maxShooterYawSpread`（默认 90°）：超限直接判 `autoYawFeasible = false`，目标保持不变，走平转超限的安全通路；遥测新增 `AutoYaw spread (deg)` | `Turret.java` |
+| P1 | 手动 `GOAL` 模式用同一平分公式但缺退化判定，退化时会把球门方位当成车头方向并照常跟随 | 退化判定抽为共用 `bisectorYaw`（超限返回 NaN）；`GOAL` 保持上一帧有效方位，从未有效则**锁存**当前平转目标为基准（不得每帧回读 `getTargetYaw()`，否则 `bearing ← 上帧输出` 正反馈会让摇杆回中后目标持续漂移撞限位） | `Turret.java`（`goalBodyYaw` / `clampManualAngle`） |
+| P1 | 退出自动瞄准时只清 `*FireHoldUntil`，未清 `autoBigFired/autoSmallFired`，`isBigFiring()/isSmallFiring()` 可永久残留 true（且 `autoAimActive=false` 时遥测不显示 Auto fired 行，属静默残留） | 新增 `clearAutoFireState()`，`update(double,...)` 与 `updateManual(...)` 开头统一清四个自动发射状态 | `Turret.java` |
 
 ### 2026-11 球门选择变更（手动设置 + 车头独立选门）
 
@@ -712,4 +714,4 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | 功能 | 手动阶段允许操作手用 GP2.LT/RT 指定炮台球门 | `RobotPosition.setManualGoalDown(boolean)` 写入 `goalDown` / `lastLiftedSide` / `cachedGoalPose`；`update()` 改为只在**本帧** MT1 非 MIDDLE 观测时覆盖，`MIDDLE` / 无读数保持上一帧（含手动输入）。TeleOp 在 `update()` 前处理扳机：红方 LT=Down / RT=Up，蓝方相反 | `RobotPosition.java`、`TeleOpMainBase.java` |
 | 变更 | GP1.LT/RT 改为直接选择车头球门 | `chassisAimGoal()` 直接返回 `aimGoal(leftTrigger)`，不调用 `setManualGoalDown`、不写回共享球门；只影响按住扳机期间的车头朝向。颜色映射与 GP2 一致；遥测 `Aim goal (shared)` / `Aim goal side` 仍表示炮台共享球门 | `TeleOpMainBase.java`、`TeleOpRed.java`、`TeleOpBlue.java` |
 
-> 未处理（本次范围外）：`AutoAimAction` 的首帧微分冲击与"成功/超时都返回 false"（自动阶段）；§12 表中 P2 类问题（超量程外推仍可自动发射、`isXxxFiring()` 切换残留等）。
+> 未处理（本次范围外）：`AutoAimAction` 的首帧微分冲击与"成功/超时都返回 false"（自动阶段）；§12 表中 P2 类问题（超量程外推仍可自动发射等）。
