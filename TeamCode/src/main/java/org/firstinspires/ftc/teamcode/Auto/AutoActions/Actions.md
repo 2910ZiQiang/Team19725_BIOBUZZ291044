@@ -445,6 +445,137 @@ STOP
 **结束收尾**：`RobotStateStore.savePose(...)` 记录结束位姿，`sweeper.setStop()` +
 `chassis.stop()` 确保底盘与集球器停稳。
 
+## 参数配置：AutoParams（盟友活动区 / 我方禁止活动区）
+
+**文件**：`Parameter/AutoParams.java`（`@Config`，与 `HypParams` 同级）
+
+**作用**：登记 3～5 名队友在「我方区域」某段时间内占据的场地范围，
+作为**我方在该时段内的禁止活动区域**，避免自动阶段抢位 / 相撞。
+
+**关键语义**：每个禁区 = **一块凸多边形区域 + 一个时间窗**；
+时间窗之外该区域**不构成限制**，因此同一块场地在不同时段可被不同队友占用。
+
+### 全局参数
+
+| 参数 | 默认值 | 单位 | 含义 |
+|------|--------|------|------|
+| `useAllyZones` | `true` | — | 总开关；`false` 时所有查询恒返回「不受限」 |
+| `allyZoneClearanceIn` | `2.0` | in | 安全外扩量：整机轮廓距禁区边界小于该值即判闯入，用于吸收定位误差 |
+| `allyZoneEscapeMarginIn` | `1.0` | in | 脱困余量：脱困目标点停在「禁区边界 + clearance + 本值」之外，避免贴边反复触发 |
+
+### 区域与时间窗
+
+所有区域按**红队视角**以场地坐标（英寸）填写，蓝队由原点中心对称自动生成：
+
+| 字段 | 区域名称 | 范围（红队） | 时间窗 |
+|------|----------|--------------|--------|
+| `ALLY_ZONE_1` | `AllyA-StartCorner` | `x∈[-70,-40]`、`y∈[40,60]` | 0 – 6000 ms |
+| `ALLY_ZONE_2` | `AllyB-MidLeft` | `x∈[-20,10]`、`y∈[30,50]` | 3000 – 12000 ms |
+| `ALLY_ZONE_3` | `AllyC-RightStart` | `x∈[25,55]`、`y∈[35,55]` | 0 – 9000 ms |
+| `ALLY_ZONE_4` | `AllyD-NearHive` | `x∈[-15,15]`、`y∈[8,28]` | 8000 – 20000 ms |
+| `ALLY_ZONE_5` | `AllyE-RightLow` | `x∈[40,68]`、`y∈[5,25]` | 12000 – 30000 ms |
+| `ALLY_ZONES_RED` | — | 上述 5 个 | 各自时间窗 |
+| `ALLY_ZONES_BLUE` | — | 上述 5 个的原点中心对称 | 各自时间窗（不变） |
+
+> 以上坐标与时间窗均为**占位默认值**，必须按队友实际跑位与战术安排修改。
+> 需要 3 个或 4 个队友时，直接删减 `ALLY_ZONE_*` 并把 `ALLY_ZONES_RED` 的 `Arrays.asList(...)`
+> 改成对应数量即可。
+
+**红蓝镜像**：`ALLY_ZONES_BLUE` 由 `area.inRelative(0, 0, Math.PI)` 生成，
+即 `(x, y) → (-x, -y)`，与 `HypParams` 中发射区域、Hive 矩形的红蓝约定一致。
+
+**时间基准**：`startMs` / `endMs` 为**相对自动阶段 START 的毫秒数**，与 OpMode 中的
+`ElapsedTime matchTime` 同一基准；自动阶段总时长见 `HypParams.AUTONOMOUS_DURATION_MS`。
+
+### 查询接口
+
+| 方法 | 返回 | 用途 |
+|------|------|------|
+| `zonesFor(teamColor)` | `List<AllyZone>` | 全量禁区（不按时间过滤） |
+| `activeZones(teamColor, matchMs)` | `List<AllyZone>` | 该时刻**生效**的禁区 |
+| `activeZoneNames(teamColor, matchMs)` | `List<String>` | 生效禁区名称（遥测 / 日志） |
+| `isForbidden(teamColor, pose, matchMs)` | `boolean` | 整机是否闯入任一生效禁区 |
+| `firstConflictingZone(teamColor, pose, matchMs)` | `AllyZone` / `null` | 冲突来源，供决定绕行方向 |
+| `nearestSafePose(teamColor, pose, matchMs)` | `Pose2d` | 脱离禁区的**最小位移**安全位姿（含安全余量、自动夹在场地内） |
+
+`AllyZone` 自身提供：`activeAt(matchMs)`、`contains(x, y)`、`distanceTo(x, y)`、`mirrored()`。
+
+**判定精度**：`isForbidden` 取 `ChassisGeometry.footprintCorners(pose)` 的**整机外接矩形四个角点**
+逐点判定，任一角点到禁区距离 ≤ `allyZoneClearanceIn` 即判闯入——
+判定的是**整机轮廓**而非单纯中心点。
+
+### 已内置到自动 OpMode 的守卫（无需额外调用）
+
+`AutoRed` / `AutoBlue` 主循环**每帧**执行下列守卫，因此禁区是**自动生效**的：
+
+```java
+long matchMs = (long) matchTime.milliseconds();
+
+// 停靠阶段优先，不再检查禁区
+Pose2d pose = RobotPosition.getInstance().getPose2d();
+AutoParams.AllyZone conflict = parkScheduled || !AutoParams.useAllyZones
+        ? null
+        : AutoParams.firstConflictingZone(teamColor, pose, matchMs);
+
+if (conflict != null && !zoneEscapeActive) {
+    zoneEscapeActive = true;
+    actionRunner.clear();                                       // 中断当前动作
+    actionRunner.add(new GoToStopPose(                          // 改投脱困动作
+            drive, AutoParams.nearestSafePose(teamColor, pose, matchMs)));
+} else if (conflict == null) {
+    zoneEscapeActive = false;                                   // 已脱离，恢复常规循环
+}
+
+// 脱困期间暂停常规动作投递
+if (!actionRunner.isBusy() && !zoneEscapeActive) { /* 状态机投递 */ }
+```
+
+行为要点：
+
+1. **闯入即中断**：`actionRunner.clear()` 会打断正在执行的轨迹 Action，不等其跑完；
+2. **脱困目标动态求解**：`nearestSafePose()` 以禁区包围盒为界，把底盘中心推到最近盒外位置
+   （航向不变、位移最小），并额外留出 `allyZoneClearanceIn + allyZoneEscapeMarginIn`，
+   结果还要夹在场地内，不会为了躲禁区而开出边框；
+3. **只触发一次**：`zoneEscapeActive` 置位后不再重复投递；
+4. **自动恢复**：脱困后 `conflict == null`，标志清零，状态机从原状态继续投递动作；
+5. **与停靠互斥**：`parkScheduled == true` 后守卫停用，停靠逻辑独占控制权。
+
+遥测新增三行：`Active Zones`（生效禁区名）、`In Forbidden`（是否闯入）、`Escaping`（是否在脱困）。
+
+### 其他用法示例
+
+**1）遥测显示当前生效的禁区（Dashboard / Driver Station）：**
+
+```java
+long matchMs = (long) matchTime.milliseconds();
+telemetry.addData("Active Zones", AutoParams.activeZoneNames(teamColor, matchMs));
+telemetry.addData("In Forbidden", AutoParams.isForbidden(
+        teamColor, RobotPosition.getInstance().getPose2d(), matchMs));
+```
+
+**2）规划前检查目标点是否落在禁区内（提前绕行，而不是闯进去再脱困）：**
+
+```java
+AutoParams.AllyZone conflict = AutoParams.firstConflictingZone(teamColor, targetPose, matchMs);
+if (conflict != null) {
+    // targetPose 在该时段属于队友活动范围，需要改点或等待时间窗结束
+    telemetry.addData("Blocked by", conflict.name + " " + conflict);
+}
+```
+
+**3）临时关闭约束做对比试验（Dashboard Config 页）：**
+
+```java
+AutoParams.useAllyZones = false;   // 等价于在 Dashboard 取消勾选
+```
+
+### 修改注意
+
+- 区域与时间窗在**类加载时**构建为不可变列表，修改后需**重新运行 OpMode** 生效；
+  `useAllyZones`、`allyZoneClearanceIn`、`allyZoneEscapeMarginIn` 三个标量可在 Dashboard Config 页实时调整。
+- 禁区判定依赖定位精度，实测若出现「压线」，优先调大 `allyZoneClearanceIn`（3~4 in）。
+- 时间窗写反（`startMs > endMs`）时构造器会自动交换，不会抛异常。
+
 ## 实机测试
 
 每个 Action 都有对应的实机测试 OpMode，位于

@@ -10,9 +10,11 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.AdaptiveParkAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.EatAction;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToOtherShootAreaViaHiveAction;
+import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToStopPose;
 import org.firstinspires.ftc.teamcode.Auto.AutoActions.GoToUnvisitedEatPointAvoidHiveAction;
 import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
 import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
+import org.firstinspires.ftc.teamcode.Parameter.AutoParams;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
@@ -35,6 +37,10 @@ import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
  * 立即清空当前动作队列，改投 {@link AdaptiveParkAction}——
  * 检测整机外接矩形是否接触场地边框：接触则开到「不接触」的位置并以此为本局停靠点
  * （停靠点随当时位姿变化，不是固定点）；不接触则原地停止。
+ *
+ * <p><b>盟友禁区守卫</b>：每帧查询 {@code AutoParams} 中当前时间窗生效的盟友活动区
+ * （即我方禁止活动区），一旦整机轮廓闯入，立即清空动作队列并改投「开到最近安全位姿」
+ * 的脱困动作；脱困期间暂停常规动作投递，脱离后自动恢复。
  *
  * <p>状态机：{@code TO_EAT_POINT → EATING → TO_SHOOT_AREA → TO_EAT_POINT … → PARKING → STOP}
  */
@@ -75,6 +81,9 @@ public class AutoBlue extends LinearOpMode {
     /** 是否已投递自适应停靠动作（保证只投递一次） */
     private boolean parkScheduled = false;
 
+    /** 是否正在执行「脱离盟友禁区」的动作（期间暂停常规动作投递） */
+    private boolean zoneEscapeActive = false;
+
     @Override
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
@@ -106,8 +115,9 @@ public class AutoBlue extends LinearOpMode {
             // 更新位姿（每帧唯一一次推进定位器）
             RobotPosition.getInstance().update();
 
-            // 剩余时间（毫秒）
-            long remainingMs = HypParams.AUTONOMOUS_DURATION_MS - (long) matchTime.milliseconds();
+            // 已流逝时间与剩余时间（毫秒）
+            long matchMs = (long) matchTime.milliseconds();
+            long remainingMs = HypParams.AUTONOMOUS_DURATION_MS - matchMs;
 
             // ===== 规定时间前 3 秒：中断当前动作，转入自适应停靠 =====
             if (!parkScheduled && remainingMs <= HypParams.PARK_TIME_THRESHOLD_MS) {
@@ -120,8 +130,24 @@ public class AutoBlue extends LinearOpMode {
                 currentState = AutoState.PARKING;
             }
 
-            // ===== 动作队列空闲时投递下一段动作 =====
-            if (!actionRunner.isBusy()) {
+            // ===== 盟友活动区（我方禁止活动区）守卫 =====
+            // 生效禁区由 AutoParams 按时间窗给出；整机轮廓一旦闯入，立即中断当前动作，
+            // 改投「开到最近安全位姿」的脱困动作，脱困期间不再投递常规动作。
+            Pose2d pose = RobotPosition.getInstance().getPose2d();
+            AutoParams.AllyZone conflict = parkScheduled || !AutoParams.useAllyZones
+                    ? null
+                    : AutoParams.firstConflictingZone(teamColor, pose, matchMs);
+            if (conflict != null && !zoneEscapeActive) {
+                zoneEscapeActive = true;
+                actionRunner.clear();
+                actionRunner.add(new GoToStopPose(
+                        drive, AutoParams.nearestSafePose(teamColor, pose, matchMs)));
+            } else if (conflict == null) {
+                zoneEscapeActive = false;
+            }
+
+            // ===== 动作队列空闲且未在脱困时，投递下一段动作 =====
+            if (!actionRunner.isBusy() && !zoneEscapeActive) {
                 switch (currentState) {
                     case TO_EAT_POINT:
                         actionRunner.add(new EatAction(sweeper));
@@ -150,9 +176,11 @@ public class AutoBlue extends LinearOpMode {
 
             actionRunner.update();
 
-            Pose2d pose = RobotPosition.getInstance().getPose2d();
             telemetry.addData("State", currentState);
             telemetry.addData("Remaining(ms)", remainingMs);
+            telemetry.addData("Active Zones", AutoParams.activeZoneNames(teamColor, matchMs));
+            telemetry.addData("In Forbidden", conflict != null);
+            telemetry.addData("Escaping", zoneEscapeActive);
             telemetry.addData("x", pose.position.x);
             telemetry.addData("y", pose.position.y);
             telemetry.addData("heading(deg)", Math.toDegrees(pose.heading.toDouble()));
