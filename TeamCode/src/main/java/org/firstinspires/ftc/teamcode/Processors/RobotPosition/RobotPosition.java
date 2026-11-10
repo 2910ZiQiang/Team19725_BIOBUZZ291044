@@ -149,6 +149,12 @@ public class RobotPosition {
         // IMU 姿态在本帧采样一次并缓存，getYaw / getYawPitchRollAngles 只读缓存
         cachedImuAngles = imu.getRobotYawPitchRollAngles();
 
+        // 球道计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
+        // 光电门采样只在这里发生一次，getBallCount() 只读缓存值
+        if (ballCounter != null) {
+            ballCounter.update();
+        }
+
         return currentPose;
     }
 
@@ -185,19 +191,6 @@ public class RobotPosition {
     public double getOmega(){return currentVelocity2d.angVel;}
 
     // ---- 球道计数透传（BallCounter：上升沿计数，reset 时清零） ----
-
-    /**
-     * 每帧透传一次球道计数（上升沿 ±1）。
-     * 满球判定由 Sweeper 负责，发射完毕与手动清空通过 {@link #resetBallCount()}。
-     *
-     * @param externalState 0 = 进入模式（球挡光计数 +1），1 = 出球 / 发射模式（-1）
-     */
-    public void updateBallCount(int externalState) {
-        if (ballCounter == null) {
-            return;
-        }
-        ballCounter.update(externalState);
-    }
 
     /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后归零；无光电门时恒为 0） */
     public int getBallCount() {
