@@ -10,6 +10,7 @@ import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.utility.AimGeometry;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
@@ -149,6 +150,9 @@ public class Turret {
     private double manualYawTarget = 0;
     /** 最近一次可解的球门方位（车体相对，弧度）：GOAL 模式方位退化时保持此值；NaN = 尚无有效值 */
     private double lastGoalBodyYaw = Double.NaN;
+    /** 上一帧的大球 / 小球扳机释放状态，用于检测"发射完成"（true → false 下降沿） */
+    private boolean lastTriggerBig = false;
+    private boolean lastTriggerSmall = false;
 
     public Turret(HardwareMap hardwareMap, Telemetry telemetry) {
         this.telemetry = telemetry;
@@ -410,6 +414,17 @@ public class Turret {
         boolean bigReady = shooterBig.update(speedBig, pitchBig, triggerBig);
         boolean smallReady = shooterSmall.update(speedSmall, pitchSmall, triggerSmall);
 
+        // 发射完成（扳机释放 true → false 的下降沿）→ 清空球道计数，
+        // 一次发射流程结束后整条球道已空，计数归零以便下一轮重新统计
+        if ((lastTriggerBig && !triggerBig) || (lastTriggerSmall && !triggerSmall)) {
+            RobotPosition rp = RobotPosition.getInstanceOrNull();
+            if (rp != null) {
+                rp.resetBallCount();
+            }
+        }
+        lastTriggerBig = triggerBig;
+        lastTriggerSmall = triggerSmall;
+
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
     }
 
@@ -639,6 +654,10 @@ public class Turret {
         manualInitialized = false;
         manualAngle = 0;
         lastManualTime = 0;
+        // 同步扳机基准：stop() 已把扳机关闭，若不同步，
+        // 下一次 update(trigger=false) 会产生假下降沿从而误清零球道计数
+        lastTriggerBig = false;
+        lastTriggerSmall = false;
     }
 
     /** 输出遥测（调用方需自行 telemetry.update()） */

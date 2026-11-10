@@ -16,6 +16,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.FusionLocalizer.AdaptiveEKFLocalizer;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.Processors.VisionLocalizer.MT1Localizer;
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.Geometry.ConvexPolygon;
@@ -61,6 +62,12 @@ public class RobotPosition {
 
     /** 当前球门的缓存值：在 init 与每帧 update 中刷新，getGoalPose 只读该缓存 */
     private Pose2d cachedGoalPose = HypParams.RedAudienceUp;
+
+    /** 球道计数器（对射光电门上升沿计数，reset 时清零），对外只做透传 */
+    private BallCounter ballCounter;
+
+    /** 球道光电门在机器人配置中的设备名 */
+    private static final String BREAK_BEAM_NAME = "breakBeam";
 
     public Pose2d currentPose;
     public PoseVelocity2d currentVelocity2d;
@@ -124,6 +131,16 @@ public class RobotPosition {
         instance.drive = new MecanumDrive(hardwareMap, instance.fusionLocalizer);
         // IMU 复用 Road Runner 已初始化的实例
         instance.imu = instance.drive.lazyImu.get();
+
+        // ---- 球道计数器：光电门由 BallCounter 自行创建与读取，本类只持有并透传 ----
+        // 满球停吸由 Sweeper 依据 getBallCount() 执行。
+        // 配置中缺少该模拟口时降级为不计数（ballCounter = null），
+        // 避免与球道无关的 OpMode（含自动）在 Init 阶段直接失败
+        try {
+            instance.ballCounter = new BallCounter(hardwareMap, BREAK_BEAM_NAME);
+        } catch (RuntimeException e) {
+            instance.ballCounter = null;
+        }
         return instance;
     }
 
@@ -172,6 +189,12 @@ public class RobotPosition {
         cachedGoalPose = goalPose(goalDown);
 
         currentPose = drive.localizer.getPose();
+        // 球道计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
+        // 光电门采样只在这里发生一次，getBallCount() 只读缓存值
+        if (ballCounter != null) {
+            ballCounter.update();
+        }
+
         return currentPose;
     }
 
@@ -245,6 +268,21 @@ public class RobotPosition {
      */
     public MT1Localizer.HiveState getHiveState(){return hiveState;}
     public double getOmega(){return currentVelocity2d.angVel;}
+
+    // ---- 球道计数透传（BallCounter：上升沿计数，reset 时清零） ----
+
+    /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后归零；无光电门时恒为 0） */
+    public int getBallCount() {
+        return ballCounter == null ? 0 : ballCounter.getCount();
+    }
+
+    /** 清零球道计数并复位边缘检测基准（透传 {@link BallCounter#reset()}） */
+    public void resetBallCount() {
+        if (ballCounter == null) {
+            return;
+        }
+        ballCounter.reset();
+    }
 
     // ---- IMU 功能（原 IMUSensor.java 合并于此） ----
 

@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
 
 @Config
 /**
@@ -41,6 +42,9 @@ public class Sweeper {
     public static int GiveTheArtifactVel = 2000;
     public static int OutputVel = -500;
 
+    /** 球道容量：球道计数（RobotPosition.getBallCount()）达到该值时自动停止吸球 */
+    public static int BallMax = 4;
+
     /** 固件速度闭环 PIDF 系数（REV Hub 内置速度 PID，可在 FTC Dashboard 实时调参） */
     public static double VelocityP = 1.17;
     public static double VelocityI = 0.117;
@@ -49,6 +53,9 @@ public class Sweeper {
 
     private int targetVelocity = 0;
     private int lastTargetVelocity = 0;
+
+    /** 本帧目标是否为"吸球"（仅吸球受球道满容量保护，供料与吐球不受限） */
+    private boolean eatCommand = false;
 
     /** 最近一次 update() 采到的功率，供读取与遥测复用 */
     private double cachedPower = 0;
@@ -94,22 +101,27 @@ public class Sweeper {
 
     public void setEat() {
         targetVelocity = EatVel;
+        eatCommand = true;
     }
 
     public void setGiveArtifact() {
         targetVelocity = GiveTheArtifactVel;
+        eatCommand = false;
     }
 
     public void setOutput() {
         targetVelocity = OutputVel;
+        eatCommand = false;
     }
 
     public void setStop() {
         targetVelocity = 0;
+        eatCommand = false;
     }
 
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
+        eatCommand = false;
     }
 
     /** 铲子抬起（切换到抬起角度） */
@@ -123,16 +135,32 @@ public class Sweeper {
     }
 
     public void update() {
+        // 球道保护：只在"吸球"（setEat）且球道已满时强制停吸。
+        // 供料（setGiveArtifact）与反向吐球（setOutput）不受限，
+        // 否则满球后会既吐不出球、也供不上料，形成互锁
+        if (isBallLaneFull() && eatCommand) {
+            targetVelocity = 0;
+        }
         // 固件闭环：把目标速度下发给 Hub 内置速度 PID
         motor.setVelocity(targetVelocity);
         lastTargetVelocity = targetVelocity;
         targetVelocity = 0; // 每帧必须重新调用set函数，否则自动归零
+        eatCommand = false;
         // 舵机保持位置：每帧刷新，保证 Dashboard 上改 ShovelUpPos/ShovelDownPos 后即时生效
         shovelServo.setPosition(targetShovelPos);
         // 本帧唯一的硬件采样点：功率 / 转速 / 电流全部缓存，getter 与遥测只读缓存
         cachedPower = motor.getPower();
         cachedVelocity = motor.getVelocity();
         cachedCurrent = motor.getCurrent(CurrentUnit.AMPS);
+    }
+
+    /**
+     * 球道是否已达到容量（依据 RobotPosition 透传的球道计数）。
+     * 未初始化 RobotPosition 时返回 false，即不做球道保护。
+     */
+    private boolean isBallLaneFull() {
+        RobotPosition rp = RobotPosition.getInstanceOrNull();
+        return rp != null && rp.getBallCount() >= BallMax;
     }
 
     public double getPower() {

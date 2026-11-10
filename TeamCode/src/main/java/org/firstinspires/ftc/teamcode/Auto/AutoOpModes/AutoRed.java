@@ -16,6 +16,7 @@ import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+
 import org.firstinspires.ftc.teamcode.RoadRunner.MecanumDrive;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.EatPointTracker;
@@ -101,7 +102,7 @@ public class AutoRed extends LinearOpMode {
         actionRunner.add(new GoToUnvisitedEatPointAvoidHiveAction(teamColor));
 
         while (opModeIsActive() && currentState != AutoState.STOP) {
-            // 更新位姿（每帧唯一一次推进定位器）
+            // 更新位姿（每帧唯一一次推进定位器）；球道光电门采样也在这个 update 内完成
             RobotPosition.getInstance().update();
 
             // 剩余时间（毫秒）
