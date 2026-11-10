@@ -59,13 +59,13 @@ public class PastCompareOp extends LinearOpMode {
 
     /**
      * 遥测键名（= Dashboard CSV 的列名）：{@code gen} 列是本次运行真正驱动的是哪一代
-     * （离线回放记 0），其余按代分组：{@code duty_gX, ff_gX, p_gX, i_gX, boost_gX,
-     * drop_gX, iact_gX, stl_gX}（Gen4 无 boost，另有 {@code vscale_g4}）。
+     * （离线回放记 0），其余按代分组：{@code duty_gX, ff_gX, p_gX, i_gX, drop_gX, iact_gX, stl_gX}
+     * （{@code boost_gX} 只有第 3 代有；Gen4 另有 {@code vscale_g4}）。
      * 时间列由 Dashboard 自己加。
      */
     static final String CSV_HEADER =
             "t,gen,target,velocity,vbus,"
-            + "duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,"
+            + "duty_g1,ff_g1,p_g1,i_g1,drop_g1,iact_g1,stl_g1,"
             + "duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,"
             + "duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4";
 
@@ -368,7 +368,6 @@ public class PastCompareOp extends LinearOpMode {
         publish("ff", 1, gen1.getFfTerm());
         publish("p", 1, gen1.getPTerm());
         publish("i", 1, gen1.getITerm());
-        publish("boost", 1, gen1.getBoostTerm());
         telemetry.addData("drop_g1", b2d(gen1.isInDrop()));
         telemetry.addData("iact_g1", b2d(gen1.isIntegralActive()));
         telemetry.addData("stl_g1", b2d(gen1.isSettled()));
@@ -386,7 +385,7 @@ public class PastCompareOp extends LinearOpMode {
         publish("ff", 4, gen4.getFfTerm());
         publish("p", 4, gen4.getPTerm());
         publish("i", 4, gen4.getITerm());
-        telemetry.addData("drop_g4", b2d(gen4.isInDrop()));
+        telemetry.addData("drop_g4", b2d(gen4.isInDrop())); // 恒 0：第 4 代已删状态机
         telemetry.addData("iact_g4", b2d(gen4.isIntegralActive()));
         telemetry.addData("stl_g4", b2d(gen4.isSettled()));
         telemetry.addData("vscale_g4", gen4 instanceof PastCalculator.Gen4

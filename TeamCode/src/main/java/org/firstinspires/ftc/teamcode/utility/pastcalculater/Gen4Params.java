@@ -36,7 +36,7 @@ public class Gen4Params {
     public static double tauVMin = 0.012;
     public static double eLoFrac = 0.50;
     public static double eHiFrac = 1.50;
-    public static double dropEnterFrac = 3.0;
+    // dropEnterFrac 已随 inDrop 状态机删除（2026-11-06，见 FlywheelCalculator 类注释「取舍记录」）
     public static double iFreezeTimeoutSec = 1.5;
 
     public static boolean useVoltageNorm = true;
@@ -44,8 +44,6 @@ public class Gen4Params {
     public static double vScaleMin = 0.85;
     public static double vScaleMax = 1.25;
     public static double tauBus = 1.0;
-    public static double busHoldOffSec = 0.6;
-    public static double busFreezeTimeoutSec = 2.0;
 
     /** 把 {@link FlywheelParams#BIG} 的值抄进本容器（单向：BIG → 这里）。 */
     public static void syncFromBig() {
@@ -64,15 +62,12 @@ public class Gen4Params {
         tauVMin = p.tauVMin;
         eLoFrac = p.eLoFrac;
         eHiFrac = p.eHiFrac;
-        dropEnterFrac = p.dropEnterFrac;
         iFreezeTimeoutSec = p.iFreezeTimeoutSec;
         useVoltageNorm = p.useVoltageNorm;
         vBusNominal = p.vBusNominal;
         vScaleMin = p.vScaleMin;
         vScaleMax = p.vScaleMax;
         tauBus = p.tauBus;
-        busHoldOffSec = p.busHoldOffSec;
-        busFreezeTimeoutSec = p.busFreezeTimeoutSec;
     }
 
     /** 把本容器的值灌进一个 {@link FlywheelParams} 实例（每帧调用，Dashboard 改动即时生效）。 */
@@ -91,15 +86,12 @@ public class Gen4Params {
         p.tauVMin = tauVMin;
         p.eLoFrac = eLoFrac;
         p.eHiFrac = eHiFrac;
-        p.dropEnterFrac = dropEnterFrac;
         p.iFreezeTimeoutSec = iFreezeTimeoutSec;
         p.useVoltageNorm = useVoltageNorm;
         p.vBusNominal = vBusNominal;
         p.vScaleMin = vScaleMin;
         p.vScaleMax = vScaleMax;
         p.tauBus = tauBus;
-        p.busHoldOffSec = busHoldOffSec;
-        p.busFreezeTimeoutSec = busFreezeTimeoutSec;
         p.motorReversed = FlywheelParams.BIG.motorReversed;
         p.speedMax = FlywheelParams.BIG.speedMax;
     }
@@ -115,8 +107,8 @@ public class Gen4Params {
     public static String summary() {
         return String.format(java.util.Locale.US,
                 "kS=%.6g kff=%.6g kp=%.6g ki=%.6g iZone=- tauV=%.3f/%.3f "
-                        + "dropX=%.2f iFreeze=%.2f vNorm=%b vBusNom=%.2f tauBus=%.2f",
-                kS, kff, kp, ki, tauVMax, tauVMin, dropEnterFrac,
+                        + "iFreeze=%.2f vNorm=%b vBusNom=%.2f tauBus=%.2f",
+                kS, kff, kp, ki, tauVMax, tauVMin,
                 iFreezeTimeoutSec, useVoltageNorm, vBusNominal, tauBus);
     }
 }

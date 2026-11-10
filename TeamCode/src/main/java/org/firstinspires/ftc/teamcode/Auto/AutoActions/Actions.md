@@ -182,11 +182,21 @@ new GoToShootAreaNearestVerticesAction(TeamColor.RED, HypParams.RedAudienceUp);
 （`AUDIENCE_UP→Up`、`AUDIENCE_DOWN→Down`、`MIDDLE→保持上次锁定，无历史默认 Up`），
 原地转向使车头对准球门，仅下发角速度、平移为 0。
 
+> ℹ️ **与 `RobotPosition` / TeleOp 的关系**：本 Action 的 `MIDDLE` 规则与 `RobotPosition`
+> 现在的「抬升侧=同侧、`MIDDLE`/无读数保持上次选择」一致，不再出现相反球门的冲突。
+> 但本 Action 仍是独立实现：直接读融合位姿 / `getHiveState()`，不读 `RobotPosition.getGoalPose()`，
+> 也不响应 TeleOp 中 GP2.LT/RT 的手动球门设置。自动阶段若要与手动阶段球门完全一致，
+> 待办：改为读 `RobotPosition.getGoalPose()`。详见 `Controllers/Turret/TurretGuide.md` §13。
+
 **控制律**：期望航向 `des = atan2(goalY-y, goalX-x)`，误差归一化到 `[-π,π]`
 后做 PD：`omega = Kp·e + Kd·de/dt`，死区内输出 0，输出限幅。
 
 **完成条件**：航向误差与实际角速度同时小于容差并持续 `settleMs` 毫秒；
-超过 `timeoutMs` 强制结束（交上层状态机处理）。
+超过 `timeoutMs` 强制结束。
+
+> ⚠️ **超时与成功都返回 `false`**（都走 `finish()`），`SequentialAction` / `ActionRunner`
+> 无法区分两者，只有遥测 `AutoAim = Timeout / Aligned` 能区分。若要用它做"对齐成功才允许
+> 发射"的门控，必须自己加判据（例如对齐后读遥测或检查 `|error|`）。
 
 **Dashboard 可调参数**：
 
