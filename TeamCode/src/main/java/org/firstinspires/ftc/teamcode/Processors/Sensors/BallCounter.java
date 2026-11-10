@@ -3,16 +3,17 @@ package org.firstinspires.ftc.teamcode.Processors.Sensors;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 /**
- * 球道计数器：读取对射光电门，按上升沿记录球道内的小球个数。
+ * 球道计数器：读取对射光电门，按方向记录球道内的小球个数。
  *
  * <p><b>职责边界（只做计数）</b>
  * <ul>
  *   <li>读取光电门：光电门挂在本类之下，由本类创建并每帧调用其 update()，
  *       电压采集、滤波与遮挡判定全部由 {@link BreakBeamSensor} 完成；</li>
- *   <li>计数：每出现一个上升沿计数 +1；</li>
+ *   <li>进入模式：上升沿 +1；退出模式：下降沿 -1；</li>
  *   <li>清零：{@link #reset()} 把计数重置为当前光路中的球数（0 或 1）并复位边缘检测基准。</li>
  * </ul>
- * 本类<b>不做</b>满球判定、不控制电机、不读手柄、也不判断计数方向：
+ * 本类<b>不做</b>满球判定、不控制电机、不读手柄；方向由 OpMode 通过
+ * {@link #update(int)} 传入：
  * 容量判断（BallMax）在 {@code Sweeper} 中，发射完毕与操作手手动清空
  * 由 {@code Turret} / {@code OpMode} 调用 {@code RobotPosition.resetBallCount()} 完成。
  *
@@ -23,6 +24,11 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
  * <p><b>非阻塞</b>：{@link #update()} 每帧 O(1)，无循环与等待。
  */
 public class BallCounter {
+
+    /** 外部模式：进入（吸球）方向，上升沿 +1 */
+    public static final int MODE_INTAKE = 0;
+    /** 外部模式：退出（从入口退回）方向，下降沿 -1 */
+    public static final int MODE_OUTPUT = 1;
 
     private final BreakBeamSensor breakBeam;
 
@@ -36,7 +42,7 @@ public class BallCounter {
     /** 上一帧的遮挡状态，用于与当前帧比较以检测上升沿 */
     private boolean lastBlocked;
 
-    /** 球道内累计的小球个数（始终 ≥ 0，只能被 {@link #reset()} 清零） */
+    /** 球道内累计的小球个数（进入 +1、退出 -1，始终 ≥ 0；reset 会重置） */
     private int count;
 
     /**
@@ -64,27 +70,50 @@ public class BallCounter {
     }
 
     /**
-     * 每帧调用一次：采样光电门，出现上升沿则计数 +1。
-     * 无参数：计数只增不减，归零统一走 {@link #reset()}。
-     *
-     * <p>第一帧只建立边缘检测基准（不计数），之后每帧按 false → true 的上升沿 +1。
-     *
-     * @return 本帧是否出现上升沿（有新球挡光进入）
+     * 默认按进入方向更新；兼容旧调用。
      */
-    //todo: 允许进球/出球双向计数
     public boolean update() {
+        return update(MODE_INTAKE);
+    }
+
+    /**
+     * 每帧调用一次：按方向检测计数边沿。
+     *
+     * <p>进入模式看上升沿（球进入光电门），退出模式看下降沿（球离开光电门）。
+     * 第一帧只建立边缘检测基准（不计数）。
+     *
+     * @param externalState {@link #MODE_INTAKE} 或 {@link #MODE_OUTPUT}
+     * @return 本帧是否出现计数边沿
+     */
+    public boolean update(int externalState) {
+        if (externalState != MODE_INTAKE && externalState != MODE_OUTPUT) {
+            throw new IllegalArgumentException(
+                    "externalState must be 0 (intake) or 1 (output), got: " + externalState);
+        }
+
         boolean blocked = breakBeam.update();
         if (!hasBaseline) {
             hasBaseline = true;
             lastBlocked = blocked;
             return false;
         }
+
         boolean risingEdge = blocked && !lastBlocked;
-        if (risingEdge) {
-            count++;
+        boolean fallingEdge = !blocked && lastBlocked;
+        boolean countEdge = (externalState == MODE_OUTPUT) ? fallingEdge : risingEdge;
+
+        if (countEdge) {
+            if (externalState == MODE_OUTPUT) {
+                if (count > 0) {
+                    count--;
+                }
+            } else {
+                count++;
+            }
         }
+
         lastBlocked = blocked;
-        return risingEdge;
+        return countEdge;
     }
 
     /** @return 当前累计的小球个数（始终 ≥ 0） */

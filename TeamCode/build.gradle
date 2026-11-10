@@ -27,6 +27,7 @@ android {
         unitTests.all {
             // JDK 16+ 模块访问限制：Mockito inline mock maker（mockito-inline）
             // 需要字节码 instrument，需开放 java.base 内部包，否则无法 mock 普通类/final 类。
+            jvmArgs '-Djdk.attach.allowAttachSelf=true'
             jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
             jvmArgs '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED'
             jvmArgs '--add-opens', 'java.base/java.util=ALL-UNNAMED'
@@ -59,6 +60,7 @@ dependencies {
 // JDK 16+ 模块访问限制：Mockito inline mock maker 需 instrument java.lang.Object 等，
 // 必须开放 java.base 内部包。直接作用于所有 Test 任务，确保 AGP 单元测试也生效。
 tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    jvmArgs '-Djdk.attach.allowAttachSelf=true'
     jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
     jvmArgs '--add-opens', 'java.base/java.lang.reflect=ALL-UNNAMED'
     jvmArgs '--add-opens', 'java.base/java.util=ALL-UNNAMED'

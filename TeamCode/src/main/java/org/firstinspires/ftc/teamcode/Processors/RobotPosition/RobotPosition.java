@@ -156,8 +156,17 @@ public class RobotPosition {
         currentPose = pose;
     }
 
-    // 每帧调用：推进融合定位器并返回当前位姿
+    /** 默认按进入方向更新；Auto 和测试程序沿用此入口。 */
     public Pose2d update() {
+        return update(BallCounter.MODE_INTAKE);
+    }
+
+    /**
+     * 按指定球道方向更新：RobotPosition → BallCounter → BreakBeam。
+     *
+     * @param ballMode {@link BallCounter#MODE_INTAKE} 或 {@link BallCounter#MODE_OUTPUT}
+     */
+    public Pose2d update(int ballMode) {
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
         currentVelocity2d = drive.updatePoseEstimate();
@@ -192,7 +201,7 @@ public class RobotPosition {
         // 球道计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
         // 光电门采样只在这里发生一次，getBallCount() 只读缓存值
         if (ballCounter != null) {
-            ballCounter.update();
+            ballCounter.update(ballMode);
         }
 
         return currentPose;
@@ -271,7 +280,7 @@ public class RobotPosition {
 
     // ---- 球道计数透传（BallCounter：上升沿计数，reset 时清零） ----
 
-    /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后重置为光路中的球数 0/1；无光电门时恒为 0） */
+    /** @return 球道内累计小球个数（进入上升沿 +1，退出下降沿 -1；reset 后重置为光路中的球数 0/1；无光电门时恒为 0） */
     public int getBallCount() {
         return ballCounter == null ? 0 : ballCounter.getCount();
     }

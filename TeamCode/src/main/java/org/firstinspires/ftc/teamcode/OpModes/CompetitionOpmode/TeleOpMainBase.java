@@ -16,6 +16,7 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
@@ -170,7 +171,14 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.BLUE);
             }
 
-            RobotPosition.getInstance().update();
+            // 本帧球道方向：右保险杠退回，其余情况按进入方向计数。
+            // 同一个模式既决定 BallCounter 的计数方向，也决定下面 Sweeper 的最终命令。
+            boolean reject = gamepad1.right_bumper;
+            int ballMode = reject
+                    ? BallCounter.MODE_OUTPUT
+                    : BallCounter.MODE_INTAKE;
+
+            RobotPosition.getInstance().update(ballMode);
 
             // ======== P1：底盘 ========
             if (gamepad1.left_trigger > 0.5) {
@@ -189,14 +197,6 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 Pose2d resetPose = (teamColor == TeamColor.BLUE) ?
                         HypParams.ResetPoseBlue : HypParams.ResetPoseRed;
                 RobotPosition.getInstance().ResetPoseTo(resetPose);
-            }
-
-            // ======== P1：吃球 ========
-            if (gamepad1.left_bumper) {
-                sweeper.setEat();
-            }
-            if (gamepad1.right_bumper) {
-                sweeper.setOutput();
             }
 
             // ======== P2：炮台 ========
@@ -229,10 +229,15 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             boolean feeding = autoAim
                     ? (turret.isBigFiring() || turret.isSmallFiring())
                     : fireKey;
-            if (feeding) {
+            // 最终命令优先级：退回 > 发射送球 > 手动吸球 > 停止。
+            // 这样电机方向和 BallCounter 的计数方向始终是同一个状态。
+            if (reject) {
+                sweeper.setOutput();
+            } else if (feeding) {
                 sweeper.setGiveArtifact();
-            } else if (!gamepad1.left_bumper && !gamepad1.right_bumper) {
-                // 未发射且主控没有手动吃球/吐出：停转
+            } else if (gamepad1.left_bumper) {
+                sweeper.setEat();
+            } else {
                 sweeper.setStop();
             }
 
@@ -263,6 +268,8 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             telemetry.addData("Fire ready small", ready.small);
             telemetry.addData("Ball count", "%d / %d",
                     RobotPosition.getInstance().getBallCount(), Sweeper.BallMax);
+            telemetry.addData("Ball lane mode",
+                    reject ? "REJECT" : (feeding ? "FEED" : "INTAKE/STOP"));
 
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
             telemetry.addData("Pose Y", "%.2f in", RobotPosition.getInstance().getY());
