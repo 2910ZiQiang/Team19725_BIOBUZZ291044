@@ -66,6 +66,9 @@ public class RobotPosition {
     /** 球道计数器（对射光电门上升沿计数，reset 时清零），对外只做透传 */
     private BallCounter ballCounter;
 
+    /** 当前球道方向，由 Sweeper 写入；update() 无参数，使用本字段向下传。 */
+    private int ballLaneMode = BallCounter.MODE_INTAKE;
+
     /** 球道光电门在机器人配置中的设备名 */
     private static final String BREAK_BEAM_NAME = "breakBeam";
 
@@ -156,17 +159,19 @@ public class RobotPosition {
         currentPose = pose;
     }
 
-    /** 默认按进入方向更新；Auto 和测试程序沿用此入口。 */
-    public Pose2d update() {
-        return update(BallCounter.MODE_INTAKE);
+    /**
+     * 由 Sweeper 在 setEat / setOutput / setGiveArtifact 时写入球道方向。
+     * OpMode 不需要知道这个方向，update() 保持无参数。
+     */
+    public void setBallLaneMode(int mode) {
+        if (mode != BallCounter.MODE_INTAKE && mode != BallCounter.MODE_OUTPUT) {
+            throw new IllegalArgumentException("invalid ball lane mode: " + mode);
+        }
+        ballLaneMode = mode;
     }
 
-    /**
-     * 按指定球道方向更新：RobotPosition → BallCounter → BreakBeam。
-     *
-     * @param ballMode {@link BallCounter#MODE_INTAKE} 或 {@link BallCounter#MODE_OUTPUT}
-     */
-    public Pose2d update(int ballMode) {
+    /** 无参数更新：推进定位，并把当前 ballLaneMode 向下传给 BallCounter。 */
+    public Pose2d update() {
         // 唯一推进点：每帧只调用一次，避免同一帧的视觉观测被重复计入 EKF
         // （MecanumDrive 的轨迹 / 转向 Action 内部已改为复用本帧结果）
         currentVelocity2d = drive.updatePoseEstimate();
@@ -201,7 +206,7 @@ public class RobotPosition {
         // 球道计数：本类每帧「更新」其下级 BallCounter（见球道计数架构图），
         // 光电门采样只在这里发生一次，getBallCount() 只读缓存值
         if (ballCounter != null) {
-            ballCounter.update(ballMode);
+            ballCounter.update(ballLaneMode);
         }
 
         return currentPose;

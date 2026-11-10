@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
+import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 
 @Config
 /**
@@ -102,16 +103,19 @@ public class Sweeper {
     public void setEat() {
         targetVelocity = EatVel;
         eatCommand = true;
+        setBallLaneMode(BallCounter.MODE_INTAKE);
     }
 
     public void setGiveArtifact() {
         targetVelocity = GiveTheArtifactVel;
         eatCommand = false;
+        setBallLaneMode(BallCounter.MODE_INTAKE);
     }
 
     public void setOutput() {
         targetVelocity = OutputVel;
         eatCommand = false;
+        setBallLaneMode(BallCounter.MODE_OUTPUT);
     }
 
     public void setStop() {
@@ -122,6 +126,18 @@ public class Sweeper {
     public void setTargetVelocity(int velocity) {
         targetVelocity = velocity;
         eatCommand = false;
+        if (velocity != 0) {
+            setBallLaneMode(velocity < 0
+                    ? BallCounter.MODE_OUTPUT : BallCounter.MODE_INTAKE);
+        }
+    }
+
+    /** 把电机方向意图传给 RobotPosition；Sweeper 不保存计数状态。 */
+    private void setBallLaneMode(int mode) {
+        RobotPosition rp = RobotPosition.getInstanceOrNull();
+        if (rp != null) {
+            rp.setBallLaneMode(mode);
+        }
     }
 
     /** 铲子抬起（切换到抬起角度） */

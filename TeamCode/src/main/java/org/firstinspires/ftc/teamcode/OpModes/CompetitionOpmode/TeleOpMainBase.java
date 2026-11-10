@@ -16,7 +16,6 @@ import org.firstinspires.ftc.teamcode.Controllers.Turret.Turret;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
 import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-import org.firstinspires.ftc.teamcode.Processors.Sensors.BallCounter;
 import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
 import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
@@ -171,14 +170,11 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 RobotPosition.getInstance().setManualGoalDown(teamColor == TeamColor.BLUE);
             }
 
-            // 本帧球道方向：右保险杠退回，其余情况按进入方向计数。
-            // 同一个模式既决定 BallCounter 的计数方向，也决定下面 Sweeper 的最终命令。
+            // 本帧只决定“是否退回”；方向由下面的 Sweeper.setXxx() 写入 RobotPosition。
             boolean reject = gamepad1.right_bumper;
-            int ballMode = reject
-                    ? BallCounter.MODE_OUTPUT
-                    : BallCounter.MODE_INTAKE;
 
-            RobotPosition.getInstance().update(ballMode);
+            // OpMode 不再传方向；RobotPosition.update() 保持无参数。
+            RobotPosition.getInstance().update();
 
             // ======== P1：底盘 ========
             if (gamepad1.left_trigger > 0.5) {
@@ -230,7 +226,7 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                     ? (turret.isBigFiring() || turret.isSmallFiring())
                     : fireKey;
             // 最终命令优先级：退回 > 发射送球 > 手动吸球 > 停止。
-            // 这样电机方向和 BallCounter 的计数方向始终是同一个状态。
+            // 电机方向和 BallCounter 的计数方向由同一个状态来源决定。
             if (reject) {
                 sweeper.setOutput();
             } else if (feeding) {
