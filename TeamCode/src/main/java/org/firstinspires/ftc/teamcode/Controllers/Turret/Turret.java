@@ -150,7 +150,11 @@ public class Turret {
     private double manualYawTarget = 0;
     /** 最近一次可解的球门方位（车体相对，弧度）：GOAL 模式方位退化时保持此值；NaN = 尚无有效值 */
     private double lastGoalBodyYaw = Double.NaN;
-    /** 上一帧的大球 / 小球扳机释放状态，用于检测"发射完成"（true → false 下降沿） */
+    /**
+     * 手动模式上一帧的扳机释放状态，用于检测"发射完成"（true → false 下降沿）→ 清空球道计数。
+     * 自动模式不使用这两个字段（由 {@link TriggerGate#justReleased()} 提供同一信息），
+     * 且每帧清零，避免切模式时把残留的 true 误判成下降沿（会在未发射时清零）。
+     */
     private boolean lastTriggerBig = false;
     private boolean lastTriggerSmall = false;
 
@@ -234,6 +238,10 @@ public class Turret {
                             boolean forceReleaseBig, boolean forceReleaseSmall) {
         aimSource = AimSource.AUTO;
         autoPreloadEnabled = preload;
+        // 自动模式的扳机完全由 TriggerGate 管理：清掉手动边沿基准，
+        // 避免"切自动前手动仍按着"在切回手动时被误判成下降沿（未发射却清零球道计数）
+        lastTriggerBig = false;
+        lastTriggerSmall = false;
         // 自动模式接管后手动状态作废：下次进入手动时用实测角重新初始化，
         // 避免沿用上一次手动会话的 manualAngle 造成目标一帧内大角度突跳
         manualInitialized = false;
@@ -303,6 +311,13 @@ public class Turret {
 
         shooterBig.setTrigger(bigGate.isFired());
         shooterSmall.setTrigger(smallGate.isFired());
+
+        // 发射结束（任一扳机 true → false 下降沿）→ 清空球道计数，
+        // 一次发射流程结束后整条球道已空，计数归零以便下一轮重新统计。
+        // 与手动路径共用 TriggerGate 的同一真值来源，不依赖操作手按键时序。
+        if (bigGate.justReleased() || smallGate.justReleased()) {
+            resetBallCount();
+        }
 
         // 返回值统一为"是否具备发射条件"，与 allowFire / 强制释放无关；
         // 本帧是否实际扣扳机见遥测 Auto big fired / Auto small fired
@@ -417,15 +432,20 @@ public class Turret {
         // 发射完成（扳机释放 true → false 的下降沿）→ 清空球道计数，
         // 一次发射流程结束后整条球道已空，计数归零以便下一轮重新统计
         if ((lastTriggerBig && !triggerBig) || (lastTriggerSmall && !triggerSmall)) {
-            RobotPosition rp = RobotPosition.getInstanceOrNull();
-            if (rp != null) {
-                rp.resetBallCount();
-            }
+            resetBallCount();
         }
         lastTriggerBig = triggerBig;
         lastTriggerSmall = triggerSmall;
 
         return new FireReady(yawReady && bigReady, yawReady && smallReady);
+    }
+
+    /** 发射结束：清空球道计数（无定位 / 无光电门时静默跳过） */
+    private void resetBallCount() {
+        RobotPosition robotPosition = RobotPosition.getInstanceOrNull();
+        if (robotPosition != null) {
+            robotPosition.resetBallCount();
+        }
     }
 
     /**

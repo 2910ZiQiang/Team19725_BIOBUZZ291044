@@ -19,6 +19,10 @@ final class TriggerGate {
 
     /** 最近一次决策后的扳机状态 */
     private boolean fired = false;
+    /** 上一帧的扳机状态，用于检测"发射结束"（true → false 下降沿） */
+    private boolean lastFired = false;
+    /** 本帧是否出现下降沿（一次发射流程结束） */
+    private boolean justReleased = false;
     /** 本段释放的最短保持截止时刻（秒）；0 表示不在保持窗口 */
     private double holdUntil = 0;
 
@@ -48,6 +52,8 @@ final class TriggerGate {
         } else {
             fired = yawHoldOk && nowSec < holdUntil;
         }
+        justReleased = lastFired && !fired;
+        lastFired = fired;
         return fired;
     }
 
@@ -56,9 +62,19 @@ final class TriggerGate {
         return fired;
     }
 
-    /** 清空（停止炮台 / 切出手动时调用），避免 {@code is*Firing()} 残留 true */
+    /**
+     * @return 本帧是否出现"释放 → 关闭"的下降沿，即一次发射流程结束
+     *         （供上层清空球道计数，与扳机决策共用同一真值来源）
+     */
+    boolean justReleased() {
+        return justReleased;
+    }
+
+    /** 清空（停止炮台 / 切出手动时调用），避免 {@code is*Firing()} 残留 true，也不留下假下降沿 */
     void clear() {
         fired = false;
+        lastFired = false;
+        justReleased = false;
         holdUntil = 0;
     }
 }

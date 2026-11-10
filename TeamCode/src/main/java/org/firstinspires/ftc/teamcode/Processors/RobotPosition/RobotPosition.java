@@ -271,12 +271,12 @@ public class RobotPosition {
 
     // ---- 球道计数透传（BallCounter：上升沿计数，reset 时清零） ----
 
-    /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后归零；无光电门时恒为 0） */
+    /** @return 球道内累计小球个数（上升沿计数，resetBallCount 后重置为光路中的球数 0/1；无光电门时恒为 0） */
     public int getBallCount() {
         return ballCounter == null ? 0 : ballCounter.getCount();
     }
 
-    /** 清零球道计数并复位边缘检测基准（透传 {@link BallCounter#reset()}） */
+    /** 重置球道计数并复位边缘检测基准（光路中仍有球时计为 1，透传 {@link BallCounter#reset()}） */
     public void resetBallCount() {
         if (ballCounter == null) {
             return;

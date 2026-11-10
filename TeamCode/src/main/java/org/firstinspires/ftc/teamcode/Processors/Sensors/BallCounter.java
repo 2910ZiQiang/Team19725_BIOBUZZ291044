@@ -10,7 +10,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
  *   <li>读取光电门：光电门挂在本类之下，由本类创建并每帧调用其 update()，
  *       电压采集、滤波与遮挡判定全部由 {@link BreakBeamSensor} 完成；</li>
  *   <li>计数：每出现一个上升沿计数 +1；</li>
- *   <li>清零：{@link #reset()} 把计数归零并复位边缘检测基准。</li>
+ *   <li>清零：{@link #reset()} 把计数重置为当前光路中的球数（0 或 1）并复位边缘检测基准。</li>
  * </ul>
  * 本类<b>不做</b>满球判定、不控制电机、不读手柄、也不判断计数方向：
  * 容量判断（BallMax）在 {@code Sweeper} 中，发射完毕与操作手手动清空
@@ -71,6 +71,7 @@ public class BallCounter {
      *
      * @return 本帧是否出现上升沿（有新球挡光进入）
      */
+    //todo: 允许进球/出球双向计数
     public boolean update() {
         boolean blocked = breakBeam.update();
         if (!hasBaseline) {
@@ -95,11 +96,15 @@ public class BallCounter {
      * 计数清零并复位边缘检测基准（阈值 / alpha 配置不受影响）。
      * <b>不读取硬件</b>：以最近一帧 {@link BreakBeamSensor#isBlocked()} 的结果作为
      * 边缘检测基准，下一帧 update() 若物理状态未变就不会产生虚假上升沿。
+     *
+     * <p><b>光路中仍有球时不清成 0</b>：该球已越过计数点、物理上仍在球道内，必须计入。
+     * 若置 0，它会以 blocked = true 一路离开，全程不产生上升沿，从此永久漏计；
+     * 表现为"实际已满、计数未满"，吃球器继续吸球直至溢出/堵球。
      */
     public void reset() {
-        count = 0;
         breakBeam.reset();
         lastBlocked = breakBeam.isBlocked();
         hasBaseline = true;
+        count = lastBlocked ? 1 : 0;
     }
 }
