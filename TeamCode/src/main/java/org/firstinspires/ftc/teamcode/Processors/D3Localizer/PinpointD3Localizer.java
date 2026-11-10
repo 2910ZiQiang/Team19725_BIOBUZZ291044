@@ -130,7 +130,7 @@ public class PinpointD3Localizer implements Localizer {
      * <ol>
      *   <li>读取 Pinpoint 场地坐标系速度</li>
      *   <li>场地坐标系 → 体坐标系 (逆旋转 R_z(-ψ))</li>
-     *   <li>读取 Hub IMU 的 pitch / roll</li>
+     *   <li>读取 Hub IMU 的 pitch / roll（由上层传入，见 {@link #update(YawPitchRollAngles)}）</li>
      *   <li>斜坡补偿：将体坐标系速度投影到水平面</li>
      *   <li>水平面体坐标系 → 场地坐标系 (用于位姿积分)</li>
      *   <li>欧拉积分更新位姿</li>
@@ -140,6 +140,17 @@ public class PinpointD3Localizer implements Localizer {
      */
     @Override
     public PoseVelocity2d update() {
+        // 独立使用（上层未传入 IMU 采样）时自行读一次
+        return update(hubImu.getRobotYawPitchRollAngles());
+    }
+
+    /**
+     * 每帧调用一次，使用上层已采样的 IMU 姿态角，避免同一帧重复读 IMU。
+     *
+     * @param angles 上层（{@code AdaptiveEKFLocalizer}）本帧采到的 yaw/pitch/roll，可为 null
+     * @return 体坐标系下的水平速度 (补偿后) 和角速度，供 EKF predict 使用
+     */
+    public PoseVelocity2d update(YawPitchRollAngles angles) {
         double now = getNow();
 
         pinpoint.update();
@@ -169,7 +180,6 @@ public class PinpointD3Localizer implements Localizer {
         double sinT = Math.sin(theta);
 
         double pitch = 0, roll = 0;
-        YawPitchRollAngles angles = hubImu.getRobotYawPitchRollAngles();
         if (angles != null) {
             pitch = angles.getPitch(AngleUnit.RADIANS);
             roll  = angles.getRoll(AngleUnit.RADIANS);

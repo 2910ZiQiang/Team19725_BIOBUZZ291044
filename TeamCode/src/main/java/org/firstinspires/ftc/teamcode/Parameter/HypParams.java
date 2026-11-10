@@ -201,6 +201,13 @@ public class HypParams {
     public static Pose2d BlueAudienceUp = new Pose2d(17.7, 12.75, 0);
     public static Pose2d BlueAudienceDown = new Pose2d(-17.7, 12.75, 0);
 
+    /**
+     * 不可发射区（凸多边形，场坐标系，用于炮台自动瞄准的预载判定）。
+     * <p>{@code null} 表示不启用——任何位置都视为可发射；判定点为底盘中心。
+     * <p>位于该区域内时预载转速为 0、仰角取 {@code pitchMin}。todo: 实机标定后填入顶点
+     */
+    public static ConvexPolygon NoShootArea = null;
+
     // ==================== HIVE 单地图解算超参 ====================
     // 单位约定：长度一律英寸（与场地坐标系一致），角度一律度（变量名带 Deg 后缀），
     // 解算内部再转换为弧度（见 MT1Localizer.solveHiveObservation）。

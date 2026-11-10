@@ -1,6 +1,9 @@
 package org.firstinspires.ftc.teamcode.Controllers.Turret;
 
+import static org.firstinspires.ftc.teamcode.utility.Time.seconds;
+
 import com.acmerobotics.dashboard.config.Config;
+import com.acmerobotics.roadrunner.Pose2d;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
@@ -9,8 +12,10 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+import org.firstinspires.ftc.teamcode.utility.AimGeometry;
 import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelCalculator;
 import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
+import org.firstinspires.ftc.teamcode.utility.Vector2D;
 
 /**
  * 单个发射器控制器：飞轮速度闭环 + 俯仰舵机 + 扳机舵机。
@@ -46,6 +51,68 @@ public class Shooter {
     // ==================== 超参数 ====================
 
     /**
+     * 单个离散仰角档位：舵机位置、适用射程区间、射程 → 飞轮转速的线性回归模型。
+     *
+     * <p>仰角只允许取有限个离散档位，每档对应固定的舵机位置；
+     * 射程落在 {@code [minRange, maxRange]} 内时，用 {@code speed = speedSlope·range + speedIntercept}
+     * 计算所需飞轮转速。所有数值均需实机标定。
+     */
+    public static class PitchModel {
+        /** 俯仰舵机位置 */
+        public double pitchPos;
+        /** 适用射程下限 (英寸) */
+        public double minRange;
+        /** 适用射程上限 (英寸) */
+        public double maxRange;
+        /** 线性模型斜率 (tick/s)/in */
+        public double speedSlope;
+        /** 线性模型截距 (tick/s) */
+        public double speedIntercept;
+
+        /** 供 Forge / Dashboard 反射使用的空构造 */
+        public PitchModel() {
+        }
+
+        public PitchModel(double pitchPos, double minRange, double maxRange,
+                          double speedSlope, double speedIntercept) {
+            this.pitchPos = pitchPos;
+            this.minRange = minRange;
+            this.maxRange = maxRange;
+            this.speedSlope = speedSlope;
+            this.speedIntercept = speedIntercept;
+        }
+
+        /** @return 该档位的射程区间是否包含 {@code range} */
+        public boolean covers(double range) {
+            return range >= minRange && range <= maxRange;
+        }
+
+        /** @return 该档位在射程 {@code range} 下所需的飞轮转速 (tick/s) */
+        public int speedFor(double range) {
+            return (int) Math.round(speedSlope * range + speedIntercept);
+        }
+    }
+
+    /** 自动瞄准的单发射器解算结果 */
+    public static class ShotSolution {
+        /** 所需平转角（rad，0 = 车头，逆时针为正） */
+        public final double yaw;
+        /** 射程（英寸） */
+        public final double range;
+        /** 选中的俯仰舵机位置 */
+        public final double pitch;
+        /** 对应飞轮转速 (tick/s，已按 speedMax 钳制) */
+        public final int speed;
+
+        public ShotSolution(double yaw, double range, double pitch, int speed) {
+            this.yaw = yaw;
+            this.range = range;
+            this.pitch = pitch;
+            this.speed = speed;
+        }
+    }
+
+    /**
      * 单个发射器的超参数。大球与小球各持一份实例，故各字段为实例字段。
      */
     public static class Params {
@@ -61,6 +128,36 @@ public class Shooter {
         public double pitchMin = 0.0;
         /** 俯仰舵机最大位置 */
         public double pitchMax = 1.0;
+
+        // ---- 自动瞄准：预载与离散仰角档位 ----
+
+        /** 该发射器预载最大飞轮转速 (tick/s)；预载解算超过该值时改用该值 + 最高仰角档 */
+        public int preSpeedMax = 2000;
+
+        /**
+         * 转速目标死区 (tick/s)：新解算值与当前目标之差小于该值时不改变目标。
+         *
+         * <p>自动瞄准下射程由位姿每帧重算（{@code speed = slope·range + intercept}），
+         * 位姿噪声会让目标转速逐帧跳动；而 {@link FlywheelCalculator} 只要目标变化 1 tick/s
+         * 就会把稳态计数清零，导致 {@link #isReady()} 永远不成立、扳机永不释放。
+         * 取一个量化台阶（约 20 tick/s，对应射程约 0.6 in）作为死区即可消除该抖动。
+         */
+        public int speedDeadband = 20;
+
+        /**
+         * 仰角档位切换滞回裕量 (英寸)：射程超出当前档位区间但未超过该裕量时保持当前档位。
+         *
+         * <p>没有滞回时，射程在档位边界附近抖动会让俯仰目标逐帧跳变，不断重置
+         * {@link #pitchSettleTime} 的计时起点，使 {@link #isReady()} 永远不成立、扳机无法释放。
+         */
+        public double pitchSwitchMargin = 5.0;
+
+        /**
+         * 离散仰角档位表，<b>必须按 {@link PitchModel#pitchPos} 升序排列</b>。
+         * 每档给出适用射程区间与「射程 → 转速」线性模型；空表时自动瞄准退化为
+         * {@code pitchMax} + 转速 0。todo: 实机标定后填入。
+         */
+        public PitchModel[] pitchModels = new PitchModel[0];
 
         // ---- 扳机 ----
         /** 扳机释放（发射）时的舵机位置 */
@@ -90,6 +187,21 @@ public class Shooter {
     /** 小球发射器超参数：飞轮参数指向 {@link FlywheelParams#SMALL} */
     public static Params SMALL_PARAMS = new Params(FlywheelParams.SMALL);
 
+    static {
+        // todo: 实机标定。以下仅为占位档位，用于验证解算流程与结构，数值必须实机重新测定。
+        //       档位按 pitchPos 升序；每档给出射程区间与该区间内「射程 → 转速」线性模型。
+        BIG_PARAMS.pitchModels = new PitchModel[]{
+                new PitchModel(0.30, 30.0, 70.0, 30.0, 900.0),
+                new PitchModel(0.50, 60.0, 100.0, 34.0, 1000.0),
+                new PitchModel(0.70, 90.0, 150.0, 38.0, 1100.0)
+        };
+        SMALL_PARAMS.pitchModels = new PitchModel[]{
+                new PitchModel(0.30, 30.0, 70.0, 30.0, 900.0),
+                new PitchModel(0.50, 60.0, 100.0, 34.0, 1000.0),
+                new PitchModel(0.70, 90.0, 150.0, 38.0, 1100.0)
+        };
+    }
+
     // ==================== 是否展开诊断遥测 ====================
 
     /** 是否在 6 行常规遥测之后展开飞轮控制量分解（整定/复盘时勾开） */
@@ -117,6 +229,8 @@ public class Shooter {
     /** 最近一次下发的扳机状态：true = 释放（发射） */
     private boolean triggerReleased = false;
 
+    /** 最近一次自动瞄准选中的仰角档位；用于 {@link #selectPitchModel(double)} 的切换滞回 */
+    private PitchModel selectedModel;
     /** 上一次的俯仰目标，用于检测目标变更 */
     private double lastPitchCommand = Double.NaN;
     /** 俯仰目标最近一次变更的时刻 (秒) */
@@ -163,33 +277,36 @@ public class Shooter {
         }
         calculator.reset();
 
-        pitchCommandTime = now();
-    }
-
-    private static double now() {
-        return System.nanoTime() / 1e9;
+        pitchCommandTime = seconds();
     }
 
     /**
-     * 每帧调用一次：把目标钳制到可用范围后下发舵机，并对飞轮执行速度闭环。
+     * 每帧调用一次（不含扳机）：把目标钳制到可用范围后下发俯仰舵机，并对飞轮执行速度闭环。
      *
-     * @param speed   目标飞轮转速 (tick/s)，钳制到 [0, {@link FlywheelParams#speedMax}]
-     * @param pitch   目标俯仰舵机位置，钳制到 [{@link Params#pitchMin}, {@link Params#pitchMax}]
-     * @param release 扳机是否释放（true = 释放/发射）
+     * <p>与 {@link #update(int, double, boolean)} 的唯一区别是不触碰扳机。自动瞄准需要
+     * 「先拿到本帧就绪结果、再决定是否扣扳机」，拆成两步后自动路径每帧只写一次扳机，
+     * 而不是前一帧的"先关后开"两次写。
+     *
+     * @param speed 目标飞轮转速 (tick/s)，钳制到 [0, {@link FlywheelParams#speedMax}]；
+     *              与当前目标之差小于 {@link Params#speedDeadband} 时保持原目标不变
+     * @param pitch 目标俯仰舵机位置，钳制到 [{@link Params#pitchMin}, {@link Params#pitchMax}]
      * @return 飞轮转速与俯仰机构是否均已到位（即当前是否具备发射条件）
      */
-    public boolean update(int speed, double pitch, boolean release) {
-        FlywheelParams fw = (params.flywheel != null) ? params.flywheel : FlywheelParams.BIG;
-        double currentTime = now();
+    public boolean updateMechanisms(int speed, double pitch) {
+        FlywheelParams fw = fw();
+        double currentTime = seconds();
 
         // 钳制到可用范围
-        targetSpeed = Math.max(0, Math.min(fw.speedMax, speed));
+        int requestedSpeed = Math.max(0, Math.min(fw.speedMax, speed));
+        // 死区：小改动不刷新目标，避免稳态判据被位姿噪声反复清零
+        if (requestedSpeed == 0 || targetSpeed == 0
+                || Math.abs(requestedSpeed - targetSpeed) >= params.speedDeadband) {
+            targetSpeed = requestedSpeed;
+        }
         targetPitch = Math.max(params.pitchMin, Math.min(params.pitchMax, pitch));
-        triggerReleased = release;
 
         // 舵机下发
         pitchServo.setPosition(targetPitch);
-        triggerServo.setPosition(release ? params.triggerOnPos : params.triggerOffPos);
 
         // 俯仰目标变更时重新计时，用于近似判断舵机是否到位
         if (Double.isNaN(lastPitchCommand) || Math.abs(targetPitch - lastPitchCommand) > 1e-6) {
@@ -207,6 +324,178 @@ public class Shooter {
         motor.setPower(power);
 
         return isReady();
+    }
+
+    /**
+     * 机构目标 + 扳机一次下发（手动 / 测试路径）。
+     *
+     * <p>等价于 {@link #updateMechanisms(int, double)} 后紧跟 {@link #setTrigger(boolean)}；
+     * 返回的是机构就绪结果，与扳机无关。
+     *
+     * @param release 扳机是否释放（true = 释放/发射）
+     */
+    public boolean update(int speed, double pitch, boolean release) {
+        boolean ready = updateMechanisms(speed, pitch);
+        setTrigger(release);
+        return ready;
+    }
+
+    /** @return 飞轮参数；未配置时回退到大球参数（与构造时的方向推断保持同一口径） */
+    private FlywheelParams fw() {
+        return (params.flywheel != null) ? params.flywheel : FlywheelParams.BIG;
+    }
+
+    /**
+     * 自动瞄准解算：由车辆位姿、球门位姿与发射器相对位置，解出所需平转角、射程，
+     * 并按离散仰角档位表选择俯仰舵机位置与飞轮转速。
+     *
+     * <p>计算步骤：
+     * <ol>
+     *   <li>发射器地面投影 {@code p_s = p + R(θ)·relPos}；</li>
+     *   <li>方位角 {@code β = atan2(y_g - y_s, x_g - x_s)}，所需平转角 {@code yaw = wrap(β - θ)}；</li>
+     *   <li>射程 {@code d = ||p_g - p_s||}；</li>
+     *   <li>在档位表中取覆盖 {@code d} 且转速最小的一档（无覆盖时取区间最近的一档）；</li>
+     *   <li>把 {@code d} 钳到该档标定区间后代入转速模型，再按 {@code speedMax} 钳制。</li>
+     * </ol>
+     *
+     * @param robotPose 车辆位姿（场坐标系，x 车头方向基准）
+     * @param goalPose  球门位置（仅 x/y 有效）
+     * @param relPos    发射器旋转中心地面投影在车体相对坐标系中的坐标（x 车头、y 车体左侧）
+     * @return 该发射器的解算结果
+     */
+    public ShotSolution solve(Pose2d robotPose, Pose2d goalPose, Vector2D relPos) {
+        Vector2D shooterPos = AimGeometry.shooterGroundPos(robotPose, relPos);
+        double range = AimGeometry.rangeTo(shooterPos, goalPose);
+        double yaw = AimGeometry.bodyYaw(robotPose, shooterPos, goalPose);
+
+        PitchModel model = selectPitchModel(range);
+        if (model == null) {
+            // 档位表为空：退化为最高仰角 + 转速 0，保持机构安全
+            return new ShotSolution(yaw, range, params.pitchMax, 0);
+        }
+        // 转速模型只在该档的标定区间内有效：滞回期间射程可能已越出区间
+        // （见 selectPitchModel 第 2 步），此时必须把射程钳回区间端点再算转速，
+        // 否则就是把标定区间外的线性模型外推，转速可能偏大/偏小、甚至顶到 speedMax
+        // 导致 isSettled() 永不成立（该档位附近发不出去）。俯仰仍取该档（滞回本意）。
+        double modelRange = clampToModelInterval(model, range);
+        return new ShotSolution(yaw, range, model.pitchPos,
+                clampSpeed(model.speedFor(modelRange)));
+    }
+
+    /**
+     * 把射程钳到该档位的标定区间 {@code [minRange, maxRange]} 内。
+     *
+     * <p>用于转速模型：模型只在标定过的射程区间内成立，区间外只能是"边界取值"，
+     * 不能外推。俯仰档位本身仍由 {@link #selectPitchModel(double)} 的滞回决定。
+     *
+     * @param model 已选中的档位
+     * @param range 实际射程（英寸）
+     * @return 用于查转速模型的射程（英寸）
+     */
+    private static double clampToModelInterval(PitchModel model, double range) {
+        if (!(range > model.minRange)) {
+            return model.minRange;      // 含 NaN：退化为区间下限
+        }
+        if (range > model.maxRange) {
+            return model.maxRange;
+        }
+        return range;
+    }
+
+    /**
+     * 选择仰角档位：优先取覆盖该射程且所需转速最小的一档；
+     * 若无档位覆盖，取射程区间距离最近的一档（速度随后由 {@link #clampSpeed(int)} 钳制）。
+     *
+     * <p><b>切换滞回</b>：一旦选中某档，只要射程仍在该档区间外 {@link Params#pitchSwitchMargin}
+     * 以内就保持不动。否则射程在档位边界附近抖动时，俯仰目标与转速目标会逐帧跳变，
+     * 不断重置 {@link #pitchSettleTime} 的计时与 {@link FlywheelCalculator} 的稳态计数，
+     * 导致 {@link #isReady()} 永远不成立、扳机无法释放。
+     */
+    private PitchModel selectPitchModel(double range) {
+        PitchModel[] models = params.pitchModels;
+        if (models == null) {
+            selectedModel = null;
+            return null;
+        }
+
+        // 1) 覆盖该射程且所需转速最小的一档
+        PitchModel best = null;
+        int bestSpeed = Integer.MAX_VALUE;
+        for (PitchModel model : models) {
+            if (model == null || !model.covers(range)) {
+                continue;
+            }
+            int speed = model.speedFor(range);
+            if (speed < bestSpeed) {
+                bestSpeed = speed;
+                best = model;
+            }
+        }
+
+        // 2) 滞回：当前档位即使已被更优档取代，只要射程仍在它区间外的滞回裕量内就保持
+        double margin = params.pitchSwitchMargin;
+        if (selectedModel != null && selectedModel != best
+                && range >= selectedModel.minRange - margin
+                && range <= selectedModel.maxRange + margin) {
+            best = selectedModel;
+        }
+
+        // 3) 无档位覆盖（且已超出滞回裕量）：取射程区间距离最近的一档
+        if (best == null) {
+            double bestDistance = Double.MAX_VALUE;
+            for (PitchModel model : models) {
+                if (model == null) {
+                    continue;
+                }
+                double distance = (range < model.minRange) ? (model.minRange - range)
+                        : (range > model.maxRange) ? (range - model.maxRange) : 0;
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = model;
+                }
+            }
+        }
+        selectedModel = best;
+        return best;
+    }
+
+    /** 把转速钳制到 [0, speedMax] */
+    private int clampSpeed(int speed) {
+        int max = (params.flywheel != null) ? params.flywheel.speedMax : Integer.MAX_VALUE;
+        return Math.max(0, Math.min(max, speed));
+    }
+
+    /**
+     * @return 离散档位中的最低仰角（档位表为空时返回 {@link Params#pitchMin}）
+     */
+    public double getMinPitch() {
+        PitchModel[] models = params.pitchModels;
+        if (models != null && models.length > 0 && models[0] != null) {
+            return models[0].pitchPos;
+        }
+        return params.pitchMin;
+    }
+
+    /**
+     * @return 离散档位中的最高仰角（档位表为空时返回 {@link Params#pitchMax}）
+     */
+    public double getMaxPitch() {
+        PitchModel[] models = params.pitchModels;
+        if (models != null && models.length > 0 && models[models.length - 1] != null) {
+            return models[models.length - 1].pitchPos;
+        }
+        return params.pitchMax;
+    }
+
+    /**
+     * 仅更新扳机状态与舵机位置，不重算速度环。
+     * 供自动瞄准在「本帧解算就绪」后单独扣扳机，避免用上一帧状态提前发射。
+     *
+     * @param release 扳机是否释放（true = 释放/发射）
+     */
+    public void setTrigger(boolean release) {
+        triggerReleased = release;
+        triggerServo.setPosition(release ? params.triggerOnPos : params.triggerOffPos);
     }
 
     /**
@@ -230,7 +519,7 @@ public class Shooter {
      */
     public boolean isReady() {
         boolean speedReady = targetSpeed > 0 && calculator.isSettled();
-        boolean pitchReady = now() - pitchCommandTime >= params.pitchSettleTime;
+        boolean pitchReady = seconds() - pitchCommandTime >= params.pitchSettleTime;
         return speedReady && pitchReady;
     }
 
@@ -291,6 +580,10 @@ public class Shooter {
      * 只在 {@link #update()} 内调用，其他接口只读 {@link #cachedBusVoltage}。
      */
     private double scanBusVoltage() {
+        // HardwareMap 未提供电压传感器（如单元测试的空实现）时视为无有效读数
+        if (voltageSensors == null) {
+            return Double.NaN;
+        }
         double result = -1;
         for (VoltageSensor sensor : voltageSensors) {
             double voltage = sensor.getVoltage();
@@ -320,7 +613,6 @@ public class Shooter {
             telemetry.addData(name + " error filt (tick/s)", "%.0f", calculator.getErrorFiltered());
             telemetry.addData(name + " tauV (ms)", "%.1f", calculator.getTauV() * 1000.0);
             telemetry.addData(name + " eBand (tick/s)", "%.0f", calculator.getErrorBand());
-            telemetry.addData(name + " inDrop", calculator.isInDrop());
             telemetry.addData(name + " settled", calculator.isSettled());
             telemetry.addData(name + " vScale", "%.3f", calculator.getVScale());
             telemetry.addData(name + " vBus filt (V)", "%.2f", calculator.getBusVoltageFiltered());

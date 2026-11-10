@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.utility.Shooter;
 
+import static org.firstinspires.ftc.teamcode.utility.Time.seconds;
+
 /**
  * 飞轮（发射机构）速度环计算器 —— <b>纯计算类</b>，不持有任何硬件引用。
  *
@@ -29,9 +31,45 @@ package org.firstinspires.ftc.teamcode.utility.Shooter;
  *       大误差时 τ 收敛到 {@link #tauVMin}（≈1 帧），避免加速/退饱和滞后。</li>
  *   <li><b>母线电压归一化</b>：只对前馈做 {@code s} 缩放（不乘反馈），
  *       让「同一目标转速在不同电量下要的占空比」保持一致，积分不必长期负重。
- *       电压必须经过长时间常数低通并<b>在掉速期间冻结</b>，否则单发发射造成的
- *       0.4 s 跌落会被当成电池没电，在恢复期末把前馈放大到 &gt;1，人造出一次饱和。</li>
+ *       电压必须经过时间常数 ≈1 s 的低通：否则单发发射造成的 0.4 s 跌落会被当成电池没电，
+ *       在恢复期末把前馈放大到 &gt;1，人造出一次饱和。</li>
  * </ul>
+ *
+ * <p><b>2026-11-06 取舍记录</b>（针对分支 {@code 简化的飞轮控制/SimpleShooter}，提交 {@code c8c0735}）：
+ * 该提交把本类改写成「原始误差 P/I + 原始母线电压归一化 + 绝对积分门限 iZone=120 tick/s」，
+ * 净删 133 行（占本文件 25%）。评审结论：<b>只有「删掉 inDrop 掉速状态机」被采纳</b>；
+ * 速度 EMA、母线电压低通、相对积分门限三项全部退回。判据来自
+ * {@code tools/tuning/analyze_generations.py} 的机器模型（A=3830 1/s、τ_plant=0.68 s、
+ * 量化 20 tick/s、控制周期 20 ms）与实测转速序列回放：
+ * <ol>
+ *   <li><b>速度 EMA 不能删</b>：编码器只有 20 tick/s 分辨率，kp×quantStep=0.038 会原封不动
+ *       印到 duty 上。同一段实测转速回放，稳态 duty 标准差 0.0053→0.0210（1750 目标）、
+ *       0.0076→0.0197（1600）、0.0059→0.0207（2050），峰峰值 0.027→0.115（G4→SimpleShooter）。
+ *       抖动会经电机/皮带变成可听的嗡嗡声与额外铜损，不是「看不见的细节」。</li>
+ *   <li><b>电压低通不能删</b>：单发发射把母线从 12.4 V 拉到 11.2 V 约 0.4 s。没有低通时
+ *       {@code s=12/V_raw} 立刻跳 1.000→1.071，前馈整段放大约 7%，再叠加电池 RC 回弹
+ *       （+0.3 V、τ≈0.15 s）会在恢复期末人造过冲：模型里 +15.8→+24.1 tick/s。
+ *       反之保留 τ=1.0 s 的 EMA，同样 0.4 s 跌落只走完 33%（12.40→12.00 V，s 变化 &lt;0.3%），
+ *       所以真正起作用的是低通本身；再叠一层「掉速期间不吸收读数」的暂停（本类用
+ *       {@code |e| ≥ eBand} 表达，见 {@link #updateBusVoltage}），恢复期过冲还能再砍一半。
+ *       <b>删低通才是问题</b>。</li>
+ *   <li><b>积分门限必须是相对量</b>：{@code eBand=max(0.02·|ω*|, 2·quantStep)}，1700 目标下 40 tick/s，
+ *       600 目标下仍是 40（量化下限）。换成固定 120 等于低目标时把积分准入放宽 3 倍：
+ *       模型里 0→600 过冲 +4.5→+11.0、0→1000 +1.8→+10.5 tick/s。
+ *       门限随目标缩放正是「低目标也能追得稳」的原因，不能为少一个参数拍平成常数。</li>
+ *   <li><b>掉速状态机可以删，但它那层电压冻结要留下</b>：模型里 depth 260 相同、回带 0.260 s
+ *       相同、过冲 +10.2→+11.2，实测日志中 inDrop 时间占比仅 6.3%。它的积分冻结一半是死代码
+ *       （进入条件是 |e|&gt;3·eBand，而积分门本来就是 |e|&lt;eBand，两者互斥），唯一实质作用是
+ *       给电压采样一个冻结窗口。这不需要状态机：<b>{@code |e| ≥ eBand} 就等于「不在稳态」</b>，
+ *       直接用它暂停电压 EMA 即可（见 {@link #updateBusVoltage}）。该写法与原状态机等效：
+ *       掉速+跌压同发时过冲 +5.1/+6.6（2 V 深跌压 +6.6）对旧版 +5.4/+7.1；而只删不补是
+ *       +12.0/+17.0，门限取 3·eBand 则只到 +10.0/+10.5（放得太早）。所以本类接受「无掉速态」，
+ *       但<b>不</b>接受同一提交里其余三项删除。</li>
+ * </ol>
+ * <p><b>残余风险</b>：冻结窗口没有 hold-off，速度一回到到位带就恢复跟踪；若此刻电池 RC 回弹
+ * 正处高点，s 会被压低约 1.5%（模型值），可接受。另外「持续 &gt;2 s 的深跌压」与深掉速同时
+ * 出现时，误差门在带内不起作用，EMA 会正常跟下去——那已经是电池真没电的工况，本来就该跟。
+ * 不要为了这种场景把滞回/超时/重播种三套时序搬回来。
  *
  * <p><b>量纲</b>：所有增益单位均为「占空比」，所以本类不直接读写硬件，调用方负责把
  * {@code DcMotorEx#getVelocity()} 的 tick/s 与 {@code VoltageSensor#getVoltage()} 的 V 传进来。
@@ -65,12 +103,25 @@ public class FlywheelCalculator {
 
     /** 速度量化台阶 (tick/s) */
     public double quantStep;
-    /** 稳态误差带比例：eBand = max(settleFrac·|ω*|, 2·quantStep) */
+    /**
+     * 稳态误差带比例：{@code eBand = max(settleFrac·|ω*|, 2·quantStep)}。
+     *
+     * <p>eBand 同时是<b>到位判据</b>与<b>积分门限</b>（{@code |e| < eBand} 才累加积分）。
+     * 门限必须随目标缩放：曾被改成固定 iZone=120 tick/s 后被否决，因为低目标下等于
+     * 把积分准入放宽 3 倍（0→600 过冲 +4.5→+11.0 tick/s）。
+     */
     public double settleFrac;
     /** 连续落在误差带内多少帧算到位 */
     public int settleFrames;
 
-    /** 稳态速度滤波时间常数 (s) */
+    /**
+     * 稳态速度滤波时间常数 (s)。
+     *
+     * <p>稳态用它压掉 20 tick/s 的量化噪声。SimpleShooter 分支曾删掉整个速度滤波、
+     * 直接用原始误差做 P/I，结果 kp×quantStep=0.038 原样出现在 duty 上：
+     * 实测回放稳态 duty 标准差 0.0053→0.0210（1750）、0.0076→0.0197（1600），峰峰 0.027→0.115。
+     * 需要「更跟手」请调小 {@link #tauVMax}，不要删滤波。
+     */
     public double tauVMax;
     /** 大误差速度滤波时间常数 (s) */
     public double tauVMin;
@@ -79,9 +130,9 @@ public class FlywheelCalculator {
     /** 误差调度上拐点（倍 eBand） */
     public double eHiFrac;
 
-    /** 进入掉速态的阈值（倍 eBand） */
-    public double dropEnterFrac;
-    /** 掉速态下积分最长冻结时间 (s) */
+    // 注：第 4 代原有 dropEnterFrac（|e| > dropEnterFrac·eBand 进入掉速态）已随 inDrop 状态机
+    // 一起删除（2026-11-06，见类注释「取舍记录」第 4 条）。不要用固定误差门限把它换个名字加回来。
+    /** 带外冻结积分的最长时长 (s)：超时清零，防「误差长期卡在带外 → 积分永久失效」 */
     public double iFreezeTimeoutSec;
 
     /** 是否启用母线电压归一化（只乘前馈） */
@@ -92,12 +143,8 @@ public class FlywheelCalculator {
     public double vScaleMin;
     /** 归一化系数上限 */
     public double vScaleMax;
-    /** 母线电压低通时间常数 (s) */
+    /** 母线电压低通时间常数 (s)：与「带外暂停吸收」一起构成电压瞬态防护，不要调小（见 updateBusVoltage） */
     public double tauBus;
-    /** 掉速结束后的电压采样 hold-off (s) */
-    public double busHoldOffSec;
-    /** 电压采样最长冻结时间 (s) */
-    public double busFreezeTimeoutSec;
 
     // ==================== 运行时状态 ====================
 
@@ -128,17 +175,11 @@ public class FlywheelCalculator {
     /** 当前电压归一化系数 */
     private double vScale = 1.0;
 
-    /** 掉速态（误差超出 {@link #dropEnterFrac}·eBand 带，带内退出） */
-    private boolean inDrop = false;
-
     /** 积分是否处于活跃（累加）状态 */
     private boolean integralActive = false;
 
-    /** 积分冻结累计时长 / 电压冻结累计时长 / 电压 hold-off 剩余时长 (s) */
-    private double iFrozenT = 0, vFrozenT = 0, busHoldT = 0;
-
-    /** 电压采样当前是否被冻结 */
-    private boolean voltageFrozen = false;
+    /** 积分冻结累计时长 (s) */
+    private double iFrozenT = 0;
 
     /** 稳态判据：连续在带内的帧数 */
     private int settleCnt = 0;
@@ -153,15 +194,11 @@ public class FlywheelCalculator {
     public static final double DEFAULT_DT = 0.02;
 
     public FlywheelCalculator() {
-        lastTime = now();
+        lastTime = seconds();
     }
 
     /** 上一次 calculate 的时间戳 (s)，仅 2 参数/3 参数入口使用 */
     private double lastTime;
-
-    private static double now() {
-        return System.nanoTime() / 1e9;
-    }
 
     // ==================== 计算 ====================
 
@@ -176,7 +213,7 @@ public class FlywheelCalculator {
      * @return 占空比，已限幅到 [dutyMin, dutyMax]
      */
     public double calculate(double targetVel, double currentVel, double vBus) {
-        double currentTime = now();
+        double currentTime = seconds();
         double dt = currentTime - lastTime;
         lastTime = currentTime;
         return calculate(targetVel, currentVel, vBus, dt);
@@ -207,10 +244,7 @@ public class FlywheelCalculator {
         // ---- 目标改变：清掉瞬态状态（不清积分——积分由停机/超时负责） ----
         if (targetVel != lastTargetVel) {
             lastTargetVel = targetVel;
-            inDrop = false;
             iFrozenT = 0.0;
-            vFrozenT = 0.0;
-            busHoldT = 0.0;
             settleCnt = 0;
         }
 
@@ -218,14 +252,12 @@ public class FlywheelCalculator {
         errorRaw = targetVel - currentVel;
         eBand = bandFor(targetVel);
 
-        // ---- 掉速态：进入用 dropEnterFrac·eBand，退出用 eBand（滞回，防抖） ----
-        if (targetVel == 0) {
-            inDrop = false;
-        } else if (Math.abs(errorRaw) > dropEnterFrac * eBand) {
-            inDrop = true;
-        } else if (Math.abs(errorRaw) < eBand) {
-            inDrop = false;
-        }
+        // ---- 不维护掉速态 ----
+        // 第 4 代在此做 inDrop 滞回（进 3·eBand、出 eBand），用来冻结积分与母线电压采样。
+        // 该状态机已删除（2026-11-06，见类注释「取舍记录」第 4 条）：实测 inDrop 时间占比 6.3%，
+        // 模型里删掉后跌深/回带时间/过冲基本不变。它对电压采样的冻结作用保留了下来，但不需要
+        // 状态——updateBusVoltage 直接用 |e| ≥ eBand 判断「不在稳态」，效果与原状态机等效。
+        // 这里只剩「带外冻结积分 + iFreezeTimeoutSec 兜底」，没有任何额外状态。
 
         // ---- 速度滤波：τ 由原始误差调度（不能用滤波后的误差，否则会自反馈滞回） ----
         tauVUsed = tauForError(Math.abs(errorRaw));
@@ -233,7 +265,7 @@ public class FlywheelCalculator {
         velocityFilt += alpha * (currentVel - velocityFilt);
         errorFilt = targetVel - velocityFilt;
 
-        // ---- 母线电压低通（掉速期间冻结）+ 归一化系数 ----
+        // ---- 母线电压低通（EMA；带外暂停吸收，见 updateBusVoltage）+ 归一化系数 ----
         updateBusVoltage(vBus, dt);
         vScale = 1.0;
         if (useVoltageNorm && validVoltage(vBusFilt)) {
@@ -254,8 +286,11 @@ public class FlywheelCalculator {
         // ---- 比例 ----
         lastPTerm = kp * errorFilt;
 
-        // ---- 积分：只在稳态误差带内累加；停机清零；带外/掉速冻结（超时强制清零） ----
-        integralActive = targetVel != 0 && !inDrop && Math.abs(errorRaw) < eBand;
+        // ---- 积分：只在稳态误差带内累加；停机清零；带外冻结（超时强制清零） ----
+        // 门限必须是相对量 eBand。SimpleShooter 换成固定 iZone=120 tick/s：1700 目标下两者等效
+        // （eBand=40 的 3 倍），但 600 目标下等于把积分准入从 40 放宽到 120（3 倍），
+        // 模型里 0→600 过冲 +4.5→+11.0、0→1000 +1.8→+10.5 tick/s。不要这么改。
+        integralActive = targetVel != 0 && Math.abs(errorRaw) < eBand;
         if (integralActive) {
             integral += errorFilt * dt;
             iFrozenT = 0.0;
@@ -372,47 +407,43 @@ public class FlywheelCalculator {
     }
 
     /**
-     * 母线电压低通：<b>掉速期间与 hold-off 期间冻结</b>，其余时间按 τ={@link #tauBus} 做 EMA。
+     * 母线电压低通：纯 EMA，τ={@link #tauBus}；读数无效时保留上一次的滤波值。
      *
-     * <p>冻结是「状态保持」而不是清零，因此解冻时没有阶跃；掉速结束后的
-     * {@link #busHoldOffSec} 用于跳过电池电压的 RC 回弹段。
+     * <p><b>不在稳态时暂停更新</b>（{@code |e| ≥ eBand}）：发射瞬间速度被打掉几百 tick/s，
+     * 远超到位带，所以整个发射窗口内 {@code vBusFilt} 保持「发射前」的值；速度回到带内后
+     * 才继续跟踪。这是旧 inDrop 状态机唯一有实效的一半（另一半积分冻结与 |e|&lt;eBand 的
+     * 积分门互斥，是死代码），去掉状态机后用误差门直接表达，不需要滞回、hold-off、超时重播种。
+     *
+     * <p>为什么需要这个窗口：单发把母线从 12.4 V 拉到 10.4 V 约 0.4 s，而 τ=1.0 s 的 EMA
+     * 只走完 33%。不暂停的话，那 1/3 的跌落会被一直记着到恢复期末——此时速度已经追平、
+     * P 项≈0，duty≈ff+i，多出来的 s 就是纯粹的助推。掉速+跌压同发场景（1900 目标、冲量 270、
+     * 12.4→10.4 V/0.4 s）实测：暂停 +5.1 tick/s，不暂停 +12.0；2 V 深跌压 +6.6 对 +17.0。
+     * 注意门限不能用 3·eBand（那等于旧状态机的进入条件，放得太早，只到 +10.0/+10.5）。
+     *
+     * <p><b>不要</b>退化成 {@code s = 12/V_raw}（被否决的 SimpleShooter 写法）：同样的 0.4 s
+     * 跌落让 s 立刻跳 1.000→1.071，恢复期末过冲 +15.8→+24.1。
      *
      * @param vBus 原始电压读数 (V)
      * @param dt   步长 (s)
      */
     private void updateBusVoltage(double vBus, double dt) {
-        boolean valid = validVoltage(vBus);
-        if (inDrop) {
-            busHoldT = busHoldOffSec;
-        } else if (busHoldT > 0) {
-            busHoldT -= dt;
-            if (busHoldT < 0) {
-                busHoldT = 0;
-            }
+        if (!validVoltage(vBus)) {
+            return;
         }
-
-        voltageFrozen = inDrop || busHoldT > 0;
-        if (voltageFrozen) {
-            vFrozenT += dt;
-            // 冻结超时：强制用当前读数重新播种，避免长期冻结导致 s 永久失真
-            if (valid && busFreezeTimeoutSec > 0 && vFrozenT >= busFreezeTimeoutSec) {
-                vBusFilt = vBus;
-                vFrozenT = 0;
-            }
-        } else {
-            vFrozenT = 0;
-            if (valid) {
-                if (!validVoltage(vBusFilt)) {
-                    vBusFilt = vBus;
-                } else {
-                    double alpha = dt / (tauBus + dt);
-                    if (alpha > 1) {
-                        alpha = 1;
-                    }
-                    vBusFilt += alpha * (vBus - vBusFilt);
-                }
-            }
+        if (!validVoltage(vBusFilt)) {
+            vBusFilt = vBus; // 首次有效读数直接播种，避免从 0 爬升
+            return;
         }
+        // 不在到位带内 = 正在被扰动（发射、堵转、急变速），此拍不吸收电压读数。
+        // 目标为 0（停机滑行）时不判：那会儿误差天然很大，但电压读数仍然是可信的。
+        if (lastTargetVel != 0.0 && Math.abs(errorRaw) >= eBand) {
+            return;
+        }
+        double alpha = dt / (tauBus + dt);
+        if (alpha > 1) {
+            alpha = 1;
+        }
+        vBusFilt += alpha * (vBus - vBusFilt);
     }
 
     // ==================== 状态重置 ====================
@@ -439,15 +470,11 @@ public class FlywheelCalculator {
         lastFFTerm = 0.0;
         lastPTerm = 0.0;
         lastITerm = 0.0;
-        inDrop = false;
         integralActive = false;
         iFrozenT = 0.0;
-        vFrozenT = 0.0;
-        busHoldT = 0.0;
-        voltageFrozen = false;
         settleCnt = 0;
         lastTargetVel = Double.NaN;
-        lastTime = now();
+        lastTime = seconds();
     }
 
     // ==================== 读取 ====================
@@ -517,15 +544,9 @@ public class FlywheelCalculator {
         return vScale;
     }
 
-    /** @return 母线电压采样当前是否被冻结 */
-    public boolean isVoltageFrozen() {
-        return voltageFrozen;
-    }
-
-    /** @return 是否处于掉速态 */
-    public boolean isInDrop() {
-        return inDrop;
-    }
+    // 注：isVoltageFrozen() / isInDrop() 随状态机一并删除（2026-11-06）。
+    // 调用方遥测列 inDrop / indrop / drop_g4 已同步移除。若 CSV 里还想要这一列，
+    // 只能自己按 |e| 判个门限——那就是把已论证过要删的状态机重新加回来，别这么做。
 
     /** @return 积分当前是否在累加（false = 冻结或停机） */
     public boolean isIntegralActive() {

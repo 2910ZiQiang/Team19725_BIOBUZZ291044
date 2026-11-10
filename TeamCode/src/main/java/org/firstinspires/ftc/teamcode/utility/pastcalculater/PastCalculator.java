@@ -241,7 +241,6 @@ public abstract class PastCalculator {
             ffTerm = Gen1Params.kV * targetVel + Gen1Params.kA * dTarget;
 
             pTerm = Gen1Params.kP * error;
-            boostTerm = 0;
             inDrop = false;
 
             duty = kSTerm + ffTerm + pTerm + iTerm + Gen1Params.kD * dError;
@@ -422,12 +421,11 @@ public abstract class PastCalculator {
             ffTerm = calc.getFfTerm();
             pTerm = calc.getPTerm();
             iTerm = calc.getITerm();
-            boostTerm = 0; // 第 4 代已删除 boost
             integral = calc.getIntegral();
             error = calc.getErrorRaw();
             errorFiltered = calc.getErrorFiltered();
             velocityFiltered = calc.getVelocityFiltered();
-            inDrop = calc.isInDrop();
+            inDrop = false; // 第 4 代已删掉速状态机（2026-11-06）：base.inDrop 只由 Gen1/Gen3 使用
             iActive = calc.isIntegralActive();
         }
 

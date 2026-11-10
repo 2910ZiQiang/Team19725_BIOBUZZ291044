@@ -1,32 +1,26 @@
 package org.firstinspires.ftc.teamcode.OpModes.CompetitionOpmode;
 
-import com.acmerobotics.dashboard.FtcDashboard;
-import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
-import com.acmerobotics.dashboard.telemetry.TelemetryPacket;
 import com.acmerobotics.roadrunner.Pose2d;
-import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-import org.firstinspires.ftc.teamcode.Controllers.Chassis.Chassis;
-import org.firstinspires.ftc.teamcode.Processors.RobotPosition.RobotPosition;
-import org.firstinspires.ftc.teamcode.Controllers.Sweeper.Sweeper;
-import org.firstinspires.ftc.teamcode.RoadRunner.Drawing;
-import org.firstinspires.ftc.teamcode.utility.ActionRunner;
 import org.firstinspires.ftc.teamcode.Parameter.HypParams;
 import org.firstinspires.ftc.teamcode.Parameter.TeamColor;
-import org.firstinspires.ftc.teamcode.utility.RobotStateStore;
 
-@com.qualcomm.robotcore.eventloop.opmode.TeleOp(name = "TeleOpRed", group = "TeleOp")
-public class TeleOpRed extends LinearOpMode {
-    private Chassis chassis;
-    private Sweeper sweeper;
-    private ActionRunner actionRunner;
+/**
+ * 红方比赛主程序：底盘 + 吃球 + 炮台（自动 / 手动瞄准），控制方式见
+ * {@link TeleOpMainBase}。
+ */
+@TeleOp(name = "TeleOpRed", group = "TeleOp")
+public class TeleOpRed extends TeleOpMainBase {
 
-
-    // 队伍颜色
-    private TeamColor teamColor;
-
+    public TeleOpRed() {
+        super(TeamColor.RED);
+    }
 
     @Override
+    protected Pose2d defaultStopPose() {
+        return HypParams.StopPoseRed;
+    }
     public void runOpMode() throws InterruptedException {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
 
@@ -139,8 +133,9 @@ public class TeleOpRed extends LinearOpMode {
             FtcDashboard.getInstance().sendTelemetryPacket(packet);
         }
 
-        chassis.stop();
-        sweeper.setStop();
-        sweeper.update();
+    @Override
+    protected Pose2d aimGoal(boolean leftTrigger) {
+        // 左扳机 → Red_Audience_Down；右扳机 → Red_Audience_Up
+        return leftTrigger ? HypParams.RedAudienceDown : HypParams.RedAudienceUp;
     }
 }

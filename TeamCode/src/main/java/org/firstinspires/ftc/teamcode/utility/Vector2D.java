@@ -176,7 +176,8 @@ public class Vector2D {
     }
 
     public static double normalizeAngle(double angle) {
-        if(Double.isNaN(angle)){
+        if (!Double.isFinite(angle)) {
+            // NaN / ±Infinity：不能让循环对 Infinity 无限迭代，统一返回 NaN 交上层判无效
             return Double.NaN;
         }
         while (angle > Math.PI) {

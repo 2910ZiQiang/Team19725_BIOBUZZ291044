@@ -40,11 +40,11 @@ import org.firstinspires.ftc.teamcode.utility.Shooter.FlywheelParams;
  *   <li>{@code error raw / filtered}：原始与滤波后误差，判断滤波是否造成滞后</li>
  *   <li>{@code velocity filtered}：滤波后转速，与原始转速之差就是滤波吃掉的量</li>
  *   <li>{@code tauV}：当前实际滤波时间常数，验证误差调度是否按设计生效</li>
- *   <li>{@code eBand}：当前稳态误差带，掉速/冻结判据的共同基准</li>
+ *   <li>{@code eBand}：当前稳态误差带，到位与积分门限的共同基准</li>
  *   <li>{@code vScale / vBusFilt}：电压归一化系数与滤波电压，判断电量估计是否跟手</li>
  *   <li>{@code kS / FF / P / I term}：控制量分解，判断积分是否长期负重</li>
  *   <li>{@code kp×step}：量化极限环幅值下限，&gt;0.05 应立即告警</li>
- *   <li>{@code inDrop / integralActive / settled}：三个状态位</li>
+ *   <li>{@code integralActive / settled}：两个状态位（掉速态已随状态机删除）</li>
  * </ol>
  */
 @Config
@@ -261,7 +261,7 @@ public class PrototypeShooter {
     /**
      * 诊断段：需要研究的量逐行列出。
      *
-     * <p>顺序按「看这个量是为了回答什么问题」排列：误差 → 滤波 → 掉速/稳态状态 →
+     * <p>顺序按「看这个量是为了回答什么问题」排列：误差 → 滤波 → 积分/到位状态 →
      * 电压归一化 → 控制量分解 → 量化告警。
      */
     private void addDiagnosticTelemetry() {
@@ -272,15 +272,13 @@ public class PrototypeShooter {
         // 2. 滤波：滤波后转速与当前实际 τ
         telemetry.addData(name + " velocity filt (tick/s)", "%.0f", calculator.getVelocityFiltered());
         telemetry.addData(name + " tauV (ms)", "%.1f", calculator.getTauV() * 1000.0);
-        // 3. 状态位：掉速 / 积分活跃 / 到位
+        // 3. 状态位：积分活跃 / 到位（掉速态已删除，见 FlywheelCalculator 类注释）
         telemetry.addData(name + " eBand (tick/s)", "%.0f", calculator.getErrorBand());
-        telemetry.addData(name + " inDrop", calculator.isInDrop());
         telemetry.addData(name + " integral active", calculator.isIntegralActive());
         telemetry.addData(name + " settled", calculator.isSettled());
         // 4. 电压归一化
         telemetry.addData(name + " vBus filt (V)", "%.2f", calculator.getBusVoltageFiltered());
         telemetry.addData(name + " vScale", "%.3f", calculator.getVScale());
-        telemetry.addData(name + " vBus frozen", calculator.isVoltageFrozen());
         // 5. 控制量分解
         telemetry.addData(name + " kS term", "%.4f", calculator.getKSTerm());
         telemetry.addData(name + " FF term", "%.4f", calculator.getFfTerm());

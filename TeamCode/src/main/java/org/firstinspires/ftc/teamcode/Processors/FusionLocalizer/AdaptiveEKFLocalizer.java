@@ -11,6 +11,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.AngularVelocity;
+import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.ejml.simple.SimpleMatrix;
 
 import org.firstinspires.ftc.teamcode.RoadRunner.Localizer;
@@ -67,6 +68,15 @@ public class AdaptiveEKFLocalizer implements Localizer {
 
     /** 最近一次里程计速度缓存 */
     private PoseVelocity2d lastVel = new PoseVelocity2d(new Vector2d(0, 0), 0);
+
+    /**
+     * 本帧采到的 IMU 姿态角：下传给 D3 里程计（斜坡补偿 pith/roll），
+     * 上供 RobotPosition 的 getYaw / getYawPitchRollAngles 读取，保证每帧只读一次 IMU。
+     */
+    private YawPitchRollAngles imuAngles =
+            new YawPitchRollAngles(AngleUnit.DEGREES, 0, 0, 0, 0);
+    /** 本帧采到的 IMU 角速度 (rad/s)，供 Q 自适应使用 */
+    private AngularVelocity imuAngularVelocity;
 
     // ---- Q 自适应: IMU 检测 ----
     /** 上一帧 roll 角速度 (rad/s) — 绕 body X 轴 (左右) */
@@ -220,16 +230,22 @@ public class AdaptiveEKFLocalizer implements Localizer {
         double dt = now - lastTimestamp;
         lastTimestamp = now;
 
-        // ---- 1. 里程计速度 ----
-        lastVel = odom.update();
+        // ---- 1. IMU 采样：本帧唯一一次。姿态角下传里程计、上供 RobotPosition，角速度供 Q 自适应 ----
+        imuAngles = hubImu.getRobotYawPitchRollAngles();
+        imuAngularVelocity = hubImu.getRobotAngularVelocity(AngleUnit.RADIANS);
 
-        // ---- 2. IMU 检测 → 自适应 Q 矩阵 (D2/D3 策略不同) ----
+        // ---- 2. 里程计速度 (D3 复用本帧 IMU 姿态，不再单独读 IMU) ----
+        lastVel = useD3
+                ? ((PinpointD3Localizer) odom).update(imuAngles)
+                : odom.update();
+
+        // ---- 3. IMU 角速度 → 自适应 Q 矩阵 (D2/D3 策略不同) ----
         ekf.setQ(adaptQ(dt));
 
-        // ---- 3. EKF 预测 ----
+        // ---- 4. EKF 预测 ----
         ekf.predict(lastVel.linearVel.x, lastVel.linearVel.y, lastVel.angVel, now);
 
-        // ---- 4. MT1 视觉 → 自适应 R 矩阵 + 门控 + EKF 更新 ----
+        // ---- 5. MT1 视觉 → 自适应 R 矩阵 + 门控 + EKF 更新 ----
         mt1.update();
         // isHiveEstimated() 为 false 表示该帧 HIVE 解算失败或被拒 (无标签 / 无解 / 取根超 CellUpAngle /
         // 姿态交叉校验不通过 / 枢轴高度未标定), 此时 mt1.getPose() 是未经修正的受污染位姿, 直接丢弃
@@ -286,7 +302,7 @@ public class AdaptiveEKFLocalizer implements Localizer {
         double sinT = Math.sin(theta);
 
         if (hubImu != null) {
-            AngularVelocity angVel = hubImu.getRobotAngularVelocity(AngleUnit.RADIANS);
+            AngularVelocity angVel = imuAngularVelocity;  // 由 update() 本帧采样，避免在 adaptQ 内再读硬件
             if (angVel != null) {
                 // IMU 体坐标系 (X=右, Y=前) → RR 体坐标系 (X=前, Y=左):
                 //   xRotationRate (绕 Robot X/右) → pitch (绕 RR Y/左, 前后倾斜)
@@ -509,6 +525,13 @@ public class AdaptiveEKFLocalizer implements Localizer {
 
     /** @return 里程计定位器 (D2: PinpointLocalizer, D3: PinpointD3Localizer) */
     public Localizer getOdom() { return odom; }
+
+    /**
+     * @return 本帧 {@link #update()} 采到的 IMU 姿态角 (yaw/pitch/roll)。
+     *         融合链路中 IMU 每帧只在此处读一次，RobotPosition 通过本接口取用，
+     *         不再自行读取硬件。
+     */
+    public YawPitchRollAngles getImuAngles() { return imuAngles; }
 
     /** @return 是否为 D3 模式 */
     public boolean isD3() { return useD3; }

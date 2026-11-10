@@ -92,3 +92,10 @@ lint/tmp/
 # 研究与分析产物仅保留本地，不纳入版本控制
 /research/
 /doc/*.md
+
+# 2026-11-06：除《飞轮控制系统演化工程笔记》docx/pdf 外，其余本地产物一律不入库
+/doc/figs_flywheel/
+/tools/md2docx.py
+/tools/tuning/analyze_generations.py
+/tools/tuning/__pycache__/
+__pycache__/

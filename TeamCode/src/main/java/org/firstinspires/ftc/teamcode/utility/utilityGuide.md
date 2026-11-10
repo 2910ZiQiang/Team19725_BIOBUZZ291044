@@ -9,6 +9,7 @@
 ```
 utility/
 ├── ActionRunner.java      # Action队列执行器
+├── DeferredAction.java    # 延迟构造的Action包装（首次run时才创建子Action）
 ├── Vector2D.java          # 2D向量类
 ├── Vector3D.java          # 3D向量类
 ├── Algebra/               # 代数计算工具
@@ -45,6 +46,7 @@ utility/
 | 文件 | 功能说明 |
 |------|----------|
 | `ActionRunner.java` | Road Runner Action队列管理器，支持串行执行多个Action，自动处理Action切换和仪表盘显示 |
+| `DeferredAction.java` | 延迟构造的 Action 包装：首次 `run()` 时才创建真正的子 Action，保证轨迹类 Action 仍以**执行时的真实位姿**规划；用于 `SequentialAction` / `ParallelAction` 组合 |
 | `Vector2D.java` | 2D向量类，支持坐标转换、旋转、平移、缩放、点积、叉积等运算 |
 | `Vector3D.java` | 3D向量类，支持3D空间中的向量运算、坐标变换、平面投影等 |
 

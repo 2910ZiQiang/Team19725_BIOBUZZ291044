@@ -47,10 +47,10 @@
 |---|---|---|---|
 | 前馈 | `kS·sgn(ω*) + kV·ω* + kA·dω*/dt` | `kS·sgn(ω*) + kff·ω*` | `s·(kS·sgn + kff·ω*)`，`s=V_nom/V_busFilt` |
 | 反馈 | `kP·e + kI·∫e + kD·de/dt` | `kp·e + ki·∫e` | `kp·e_f + ki·∫e_f`（`e_f` 用**滤波后**转速） |
-| 积分门 | `|e| < iZone` 才积 | `|e| < iZone` 才积，掉速触发清零 | `|e| < eBand` 且非掉速才积，超时强制清 |
-| 掉速处理 | 无 | `boost = clamp(kBoost·e, 0, boostMax)`，持续 `boostDurationSec` | 冻结积分 + 冻结电压 EMA，**不加 boost** |
+| 积分门 | `|e| < iZone` 才积 | `|e| < iZone` 才积，掉速触发清零 | `|e| < eBand` 才积，冻结超 `iFreezeTimeoutSec` 强制清 |
+| 掉速处理 | 无 | `boost = clamp(kBoost·e, 0, boostMax)`，持续 `boostDurationSec` | 无状态机；`|e| ≥ eBand` 时暂停吸收电压读数（2026-11-06 删掉速状态机，冻结窗口改为误差门表达） |
 | 速度滤波 | 无 | 无 | EMA，`τ` 在 `tauVMax~tauVMin` 按误差调度 |
-| 电压归一化 | 无 | 无 | 有（`useVoltageNorm` 开关，BIG 当前 false） |
+| 电压归一化 | 无 | 无 | 有（`useVoltageNorm` 开关，BIG/SMALL 均为 true） |
 | 稳态判据 | 本实验统一：`|e| ≤ max(settleFrac·|ω*|, 2·quantStep)` 连续 `settleFrames` 帧（三代同口径，否则图没法并排比） |
 
 > 第 3 代实现与 `0969cbd^` 的历史 `FlywheelCalculator` **逐行等价**（含 `dropArmed` 武装规则、
@@ -99,7 +99,7 @@ python tools/tuning/plot_csv.py .\PastCompare_log.csv --cols duty_g1,duty_g3,dut
 
 ```
 gen,target,velocity,vbus,
-duty_g1,ff_g1,p_g1,i_g1,boost_g1,drop_g1,iact_g1,stl_g1,
+duty_g1,ff_g1,p_g1,i_g1,drop_g1,iact_g1,stl_g1,
 duty_g3,ff_g3,p_g3,i_g3,boost_g3,drop_g3,iact_g3,stl_g3,
 duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 ```
@@ -110,8 +110,8 @@ duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 
 - `gen`：本次**真正驱动**电机的是哪一代（1/3/4）；离线回放记 **0**。
 - `ff_*`：前馈总量（Gen1 = `kS+kV·ω*+kA·dω*`，Gen3 = `kS+kff·ω*`，Gen4 = `s·(kS+kff·ω*)`）。
-- `boost_*`：只有第 3 代非零；第 4 代恒 0（boost 已删除）。
-- `drop_*` / `iact_*` / `stl_*`：掉速标志 / 积分激活 / 已稳定，1=真 0=假。
+- `boost_g3`：只有第 3 代有这一列（Gen1 从未有 boost，Gen4 的 boost 已删除，故两家不列）。
+- `drop_*` / `iact_*` / `stl_*`：掉速标志 / 积分激活 / 已稳定，1=真 0=假（`drop_g4` 恒 0：第 4 代的掉速状态机已于 2026-11-06 删除）。
 - `vscale_g4`：第 4 代的电压缩放 `s`；恒为 1 说明 `useVoltageNorm=false` 或电压读数缺失。
 
 分代 Tuner 的遥测键：
@@ -120,7 +120,7 @@ duty_g4,ff_g4,p_g4,i_g4,drop_g4,iact_g4,stl_g4,vscale_g4
 |---|---|---|
 | `TuneGen1Op` | `duty,velocity,phase` + `fit_kV,fit_kS,step_kP,step_kI` | 纯开环辨识数据 |
 | `TuneGen3Op` | `duty,velocity,error,boost,phase` + `fit_kff,fit_kS,step_kp,step_ki,dip_peak_error,dip_peak_boost,dip_recovery,dip_overshoot` | 含 boost 段 |
-| `TuneGen4Op` | `target,velocity,error,duty,ff,p,i,indrop,iactive,settled,vbus,vscale,phase` + `meas_*`/`kp_step`/`dip_*` | 闭环验收 |
+| `TuneGen4Op` | `target,velocity,error,duty,ff,p,i,iactive,settled,vbus,vscale,phase` + `meas_*`/`kp_step`/`dip_*` | 闭环验收 |
 
 `phase` 数字码（三份通用）：**1** 开环点/稳态前 **2** 判读窗口 **3** 阶跃 **4** 掉速
 **5** 恢复 **6** 掉速前稳定。
