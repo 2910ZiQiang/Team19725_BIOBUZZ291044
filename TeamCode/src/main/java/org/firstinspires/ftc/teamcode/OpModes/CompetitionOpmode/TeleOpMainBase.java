@@ -142,16 +142,17 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         telemetry.addData("A", "Reset Pose to " + (teamColor == TeamColor.BLUE ? "Blue" : "Red") + " ResetPose");
         telemetry.addData("Left Bumper", "Sweeper Eat");
         telemetry.addData("Right Bumper", "Sweeper Output");
+        telemetry.addData("P1: B", "Reset ball count");
         telemetry.addData("--- P2: 炮台 ---", "");
         telemetry.addData("B", "Toggle Auto / Manual Aim (auto by default)");
         telemetry.addData("Y", "Toggle Preload (auto aim only)");
         telemetry.addData("P2: LT / RT", "Manual goal: Down / Up (RED), Up / Down (BLUE)");
         telemetry.addData("Auto: A", "Fire (hold)");
-        telemetry.addData("Auto: LB / RB", "Force release small / big");
+        telemetry.addData("Auto: RB", "Force release BOTH triggers");
         telemetry.addData("Manual: Sticks", "LstickY small pitch | RstickY big pitch | LstickX yaw rate");
         telemetry.addData("Manual: X", "Cycle yaw mode REL / ABS / GOAL");
         telemetry.addData("Manual: Dpad", "U/D big speed | L/R small speed");
-        telemetry.addData("Manual: LB / RB", "Small / big trigger");
+        telemetry.addData("Manual: RB", "Release BOTH triggers (hold)");
         telemetry.update();
         telemetry.setMsTransmissionInterval(250);
 
@@ -209,14 +210,16 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                 turret.cycleManualYawMode();
             }
 
+            // 单一扳机键：手动/自动、大球/小球共用 RB，按下即同时释放两个扳机
+            boolean fireKey = gamepad2.right_bumper;
+
             Turret.FireReady ready;
             if (autoAim) {
-                // 自动瞄准：A 按住即允许发射；LB/RB 强制释放小球/大球
+                // 自动瞄准：A 按住即允许发射；RB 强制释放两个发射器（无视就绪与平转）
                 //todo：同时停止底盘
-                ready = turret.update(gamepad2.a, preloadEnabled,
-                        gamepad2.right_bumper, gamepad2.left_bumper);
+                ready = turret.update(gamepad2.a, preloadEnabled, fireKey, fireKey);
             } else {
-                ready = updateManualTurret();
+                ready = updateManualTurret(fireKey);
             }
 
             // ======== 扳机释放 → 吃球器送球；停止发射后停转 ========
@@ -225,7 +228,7 @@ public abstract class TeleOpMainBase extends LinearOpMode {
             // 手动瞄准的扳机就是副控按键本身。
             boolean feeding = autoAim
                     ? (turret.isBigFiring() || turret.isSmallFiring())
-                    : (gamepad2.right_bumper || gamepad2.left_bumper);
+                    : fireKey;
             if (feeding) {
                 sweeper.setGiveArtifact();
             } else if (!gamepad1.left_bumper && !gamepad1.right_bumper) {
@@ -235,7 +238,14 @@ public abstract class TeleOpMainBase extends LinearOpMode {
 
             // ======== 更新 & 遥测 ========
             actionRunner.update();
+            // 球道计数：光电门采样已在 RobotPosition.update() 内完成，
+            // 满球停吸由 Sweeper 依据 getBallCount() 判定
             sweeper.update();
+
+            // 手动清空放在满球停吸判定之后，保持「计数 → 停吸 → 手动清空」的帧内顺序
+            if (gamepad1.bWasPressed()) {
+                RobotPosition.getInstance().resetBallCount();
+            }
 
             telemetry.addData("Team", teamColor == TeamColor.BLUE ? "BLUE" : "RED");
             telemetry.addData("useNoHeadMode", chassis.getUseNoHeadMode());
@@ -251,6 +261,8 @@ public abstract class TeleOpMainBase extends LinearOpMode {
                     sharedGoal.position.x, sharedGoal.position.y);
             telemetry.addData("Fire ready big", ready.big);
             telemetry.addData("Fire ready small", ready.small);
+            telemetry.addData("Ball count", "%d / %d",
+                    RobotPosition.getInstance().getBallCount(), Sweeper.BallMax);
 
             telemetry.addData("Pose X", "%.2f in", RobotPosition.getInstance().getX());
             telemetry.addData("Pose Y", "%.2f in", RobotPosition.getInstance().getY());
@@ -285,9 +297,10 @@ public abstract class TeleOpMainBase extends LinearOpMode {
     /**
      * 手动瞄准：与 {@code TurretManualTest} 相同的控制方式，直接给定 yaw / 仰角 / 转速 / 扳机。
      *
+     * @param fireKey 扳机键（同时释放大球与小球）
      * @return 本帧两个发射器是否具备发射条件
      */
-    private Turret.FireReady updateManualTurret() {
+    private Turret.FireReady updateManualTurret(boolean fireKey) {
         // ---- 摇杆：上推时 axis = -1，取负号使"上 → 增大" ----
         double pitchSmall = axisToRange(-gamepad2.left_stick_y,
                 Shooter.SMALL_PARAMS.pitchMin, Shooter.SMALL_PARAMS.pitchMax);
@@ -302,9 +315,9 @@ public abstract class TeleOpMainBase extends LinearOpMode {
         targetSpeedBig = clamp(targetSpeedBig + v * speedStep, 0, Shooter.BIG_PARAMS.flywheel.speedMax);
         targetSpeedSmall = clamp(targetSpeedSmall + h * speedStep, 0, Shooter.SMALL_PARAMS.flywheel.speedMax);
 
-        // ---- 扳机：按住释放（LB 小球 / RB 大球） ----
+        // ---- 扳机：按住释放（RB 同时释放大球与小球） ----
         return turret.updateManual(yawRate, pitchBig, pitchSmall,
-                targetSpeedBig, targetSpeedSmall, gamepad2.right_bumper, gamepad2.left_bumper);
+                targetSpeedBig, targetSpeedSmall, fireKey, fireKey);
     }
 
     /** 摇杆位置 [-1, 1] 线性映射到 [lo, hi] */

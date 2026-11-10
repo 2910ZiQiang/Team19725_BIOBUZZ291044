@@ -617,14 +617,16 @@ OpMode：[TeleOpMainBase](file:///F:/github/BIOBUZZ/TeamCode/src/main/java/org/f
 | **LT / RT（按住）** | 手动选择炮台球门：红方 LT = AudienceDown / RT = AudienceUp，蓝方相反；仅在本帧 MT1 无有效（非 MIDDLE）读数时生效，并保持到下一次有效读数 |
 | **X** | 循环手动模式 `RELATIVE → ABSOLUTE → GOAL` |
 | **A（按住）** | 自动模式：允许发射（松开即取消，扳机立即关闭） |
-| RB / LB | 自动模式：强制释放 大球 / 小球扳机（无视就绪）<br>手动模式：大球 / 小球扳机 |
+| RB（按住） | **两个扳机共用的唯一释放键**：自动模式下强制释放大球与小球（无视就绪与平转）；手动模式下同时释放两个扳机 |
 | 左摇杆 X | 手动平转角速度（满偏 = ±120°/s） |
 | 左摇杆 Y | 小球俯仰（`axisToRange` 映射到 `pitchMin..pitchMax`） |
 | 右摇杆 Y | 大球俯仰 |
 | 十字键 上/下 | 大球目标转速 ±100 tick/s |
 | 十字键 左/右 | 小球目标转速 ±100 tick/s |
 
-自动模式调用 `turret.update(allowFire, preload, forceBig, forceSmall)`；手动模式调用 `turret.updateManual(...)`。
+自动模式调用 `turret.update(allowFire, preload, forceBig, forceSmall)`；手动模式调用 `turret.updateManual(...)`。两种模式都把 GP2.RB 同时传给大球与小球两个参数。
+
+**发射结束清空球道计数**：自动/手动两条路径都在扳机 `true → false` 下降沿调用 `RobotPosition.resetBallCount()`；自动路径用 `TriggerGate.justReleased()`（与扳机决策同一真值来源），手动路径用按键边沿。`BallCounter.reset()` 在光路仍被遮挡时把计数置 1 而不是 0，避免该球永久漏计。
 
 遥测 `Aim goal side` / `Aim goal (shared)` 显示炮台当前球门；按住 GP1 扳机时车头可能临时指向另一个门，属预期。
 
